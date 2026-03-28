@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en" class="scroll-smooth">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SleepFlow - Smart Sleep, Better Mornings</title>
+    <meta
+      name="description"
+      content="Build your evening sleep routine, wake gently in your ideal window, and get actionable daily insights."
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              base: "#0B1020",
+              card: "#121933",
+              line: "rgba(255,255,255,0.1)",
+              textMuted: "#A1A9C8",
+              accent: "#7C8CFF",
+              accentAlt: "#9A7CFF"
+            },
+            boxShadow: {
+              glow: "0 12px 44px rgba(124, 140, 255, 0.28)"
+            }
+          }
+        }
+      };
+    </script>
+  </head>
+  <body class="bg-base text-white antialiased">
+    <div class="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_85%_10%,rgba(154,124,255,0.24),transparent_35%),radial-gradient(circle_at_15%_90%,rgba(124,140,255,0.22),transparent_35%)]"></div>
+
+    <header class="sticky top-0 z-50 border-b border-line bg-base/80 backdrop-blur-md">
+      <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
+        <a href="#" class="text-lg font-semibold tracking-tight">SleepFlow</a>
+        <nav class="hidden gap-7 text-sm text-textMuted md:flex">
+          <a href="#problem" class="transition hover:text-white">Problem</a>
+          <a href="#how" class="transition hover:text-white">How it works</a>
+          <a href="#features" class="transition hover:text-white">Features</a>
+          <a href="#cta" class="transition hover:text-white">Download</a>
+        </nav>
+        <a
+          href="#cta"
+          class="rounded-xl bg-accent px-4 py-2 text-sm font-semibold shadow-glow transition hover:-translate-y-0.5 hover:bg-indigo-400"
+          >Start Sleeping Better</a
+        >
+      </div>
+    </header>
+
+    <main>
+      <section class="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-14 pt-12 sm:px-6 lg:grid-cols-2 lg:pt-20">
+        <div>
+          <p class="inline-flex rounded-full border border-line bg-white/5 px-3 py-1 text-xs text-textMuted">
+            Science-informed sleep routine
+          </p>
+          <h1 class="mt-4 text-4xl font-semibold leading-tight sm:text-5xl">
+            Wake up clear-headed, <span class="text-accent">not shocked awake.</span>
+          </h1>
+          <p class="mt-5 max-w-xl text-base text-textMuted sm:text-lg">
+            Set your alarm, choose calming sleep sounds, and wake within your ideal window for a gentler morning and a
+            more energized day.
+          </p>
+          <div class="mt-8 flex flex-wrap gap-3">
+            <a
+              href="#cta"
+              class="rounded-xl bg-accent px-5 py-3 text-sm font-semibold shadow-glow transition hover:-translate-y-0.5 hover:bg-indigo-400"
+              >Start Sleeping Better</a
+            >
+            <a
+              href="#how"
+              class="rounded-xl border border-line bg-white/5 px-5 py-3 text-sm font-semibold transition hover:bg-white/10"
+              >See How It Works</a
+            >
+          </div>
+          <div class="mt-5 flex flex-wrap gap-2 text-xs text-textMuted">
+            <span class="rounded-full border border-line px-3 py-1">No wearable required</span>
+            <span class="rounded-full border border-line px-3 py-1">Non-invasive</span>
+            <span class="rounded-full border border-line px-3 py-1">2-minute setup</span>
+          </div>
+        </div>
+
+        <div class="rounded-3xl border border-line bg-card p-5 shadow-glow">
+          <div class="rounded-2xl border border-line bg-base/70 p-4">
+            <div class="mb-5 flex items-center justify-between">
+              <p class="text-sm text-textMuted">Evening setup</p>
+              <p class="text-xs text-accent">Ready for sleep mode</p>
+            </div>
+
+            <div class="space-y-3 text-sm">
+              <div class="flex items-center justify-between rounded-xl bg-white/5 p-3">
+                <span class="text-textMuted">Alarm time</span>
+                <span class="font-medium">07:00</span>
+              </div>
+              <div class="flex items-center justify-between rounded-xl bg-white/5 p-3">
+                <span class="text-textMuted">Wake-up window</span>
+                <span class="font-medium">06:30 - 07:00</span>
+              </div>
+              <div class="flex items-center justify-between rounded-xl bg-white/5 p-3">
+                <span class="text-textMuted">Sleep sound</span>
+                <span class="font-medium">Rain + Piano</span>
+              </div>
+              <div class="flex items-center justify-between rounded-xl bg-white/5 p-3">
+                <span class="text-textMuted">Auto-off timer</span>
+                <span class="font-medium">30 min</span>
+              </div>
+            </div>
+            <button
+              class="mt-5 w-full rounded-xl bg-gradient-to-r from-accent to-accentAlt px-4 py-3 text-sm font-semibold transition hover:opacity-95"
+            >
+              Start Sleep
+            </button>
+            <p class="mt-2 text-center text-xs text-textMuted">Microcopy: "You're all set. Sleep mode starts now."</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="problem" class="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+        <h2 class="text-2xl font-semibold sm:text-3xl">Most sleep apps track your night. Few improve your morning.</h2>
+        <div class="mt-6 grid gap-4 sm:grid-cols-3">
+          <article class="rounded-2xl border border-line bg-card p-5">
+            <h3 class="font-medium">Hard to fall asleep</h3>
+            <p class="mt-2 text-sm text-textMuted">Even when you are tired, your mind keeps running at bedtime.</p>
+          </article>
+          <article class="rounded-2xl border border-line bg-card p-5">
+            <h3 class="font-medium">Harsh wake-ups</h3>
+            <p class="mt-2 text-sm text-textMuted">A sudden alarm can pull you from deep sleep and ruin your morning.</p>
+          </article>
+          <article class="rounded-2xl border border-line bg-card p-5">
+            <h3 class="font-medium">No clear direction</h3>
+            <p class="mt-2 text-sm text-textMuted">You get data, but not practical advice for what to change tonight.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+        <div class="rounded-3xl border border-line bg-card p-6 sm:p-8">
+          <h2 class="text-2xl font-semibold">A complete sleep flow, from evening calm to daytime energy</h2>
+          <p class="mt-3 max-w-3xl text-textMuted">
+            SleepFlow turns a fragmented routine into one guided flow: set your bedtime conditions, wake at the right
+            moment, and get clear insights that help you improve the next night.
+          </p>
+        </div>
+      </section>
+
+      <section id="how" class="mx-auto max-w-6xl px-4 py-12 sm:px-6">
+        <h2 class="text-2xl font-semibold sm:text-3xl">How it works</h2>
+        <p class="mt-2 text-sm text-textMuted">Mapped directly to your evening, morning, and day flow.</p>
+        <div class="mt-7 grid gap-4 md:grid-cols-3">
+          <article class="rounded-2xl border border-line bg-card p-5 transition hover:-translate-y-1">
+            <p class="text-xs text-accent">EVENING</p>
+            <h3 class="mt-2 font-semibold">Build your sleep setup in 2 minutes</h3>
+            <p class="mt-2 text-sm text-textMuted">
+              Set alarm time, choose your wake-up window, pick a sleep sound, and set auto-off.
+            </p>
+            <p class="mt-3 text-xs text-textMuted">Microcopy: "Ready for a calmer night?"</p>
+          </article>
+          <article class="rounded-2xl border border-line bg-card p-5 transition hover:-translate-y-1">
+            <p class="text-xs text-accent">MORNING</p>
+            <h3 class="mt-2 font-semibold">Wake gently in your ideal window</h3>
+            <p class="mt-2 text-sm text-textMuted">The alarm triggers at a better moment, so mornings feel smoother.</p>
+            <p class="mt-3 text-xs text-textMuted">Microcopy: "Good morning. You slept 7h 24m."</p>
+          </article>
+          <article class="rounded-2xl border border-line bg-card p-5 transition hover:-translate-y-1">
+            <p class="text-xs text-accent">DAY</p>
+            <h3 class="mt-2 font-semibold">See insights you can act on</h3>
+            <p class="mt-2 text-sm text-textMuted">Review sleep data, activity level, and one focused recommendation.</p>
+            <p class="mt-3 text-xs text-textMuted">Microcopy: "Try sleeping 20 minutes earlier tonight."</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="features" class="mx-auto max-w-6xl px-4 py-12 sm:px-6">
+        <h2 class="text-2xl font-semibold sm:text-3xl">Features that turn into real benefits</h2>
+        <div class="mt-7 grid gap-4 md:grid-cols-2">
+          <article class="rounded-2xl border border-line bg-card p-5">
+            <div class="mb-3 text-accent">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path
+                  fill-rule="evenodd"
+                  d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-11a.75.75 0 00-1.5 0v3c0 .2.08.39.22.53l2 2a.75.75 0 101.06-1.06l-1.78-1.78V7z"
+                  clip-rule="evenodd"
+                />
+              </svg>
+            </div>
+            <h3 class="font-semibold">Smart wake-up window</h3>
+            <p class="mt-2 text-sm text-textMuted">Wake up at the right moment, not in the middle of deep sleep.</p>
+          </article>
+          <article class="rounded-2xl border border-line bg-card p-5">
+            <div class="mb-3 text-accent">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M10 2a1 1 0 011 1v1.07A7.002 7.002 0 0117 11v2l1 2v1H2v-1l1-2v-2a7.002 7.002 0 016-6.93V3a1 1 0 011-1z" />
+              </svg>
+            </div>
+            <h3 class="font-semibold">Gentle alarm</h3>
+            <p class="mt-2 text-sm text-textMuted">Start your day calmer, with less stress and less snoozing.</p>
+          </article>
+          <article class="rounded-2xl border border-line bg-card p-5">
+            <div class="mb-3 text-accent">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path
+                  fill-rule="evenodd"
+                  d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-10.707a1 1 0 00-1.414-1.414L9 9.172 7.707 7.879a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                  clip-rule="evenodd"
+                />
+              </svg>
+            </div>
+            <h3 class="font-semibold">Sleep sounds + auto-off timer</h3>
+            <p class="mt-2 text-sm text-textMuted">Fall asleep faster with soundscapes that fade out automatically.</p>
+          </article>
+          <article class="rounded-2xl border border-line bg-card p-5">
+            <div class="mb-3 text-accent">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M3 3a1 1 0 011-1h12a1 1 0 011 1v14l-3.5-2-3.5 2-3.5-2L3 17V3z" />
+              </svg>
+            </div>
+            <h3 class="font-semibold">Sleep analytics + recommendations</h3>
+            <p class="mt-2 text-sm text-textMuted">Understand your patterns and wake up more energized every day.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="mx-auto max-w-6xl px-4 py-12 sm:px-6" id="trust">
+        <h2 class="text-2xl font-semibold sm:text-3xl">Built for people skeptical about sleep apps</h2>
+        <div class="mt-6 grid gap-4 md:grid-cols-3">
+          <article class="rounded-2xl border border-line bg-card p-5">
+            <h3 class="font-semibold">No overpromises</h3>
+            <p class="mt-2 text-sm text-textMuted">Clear logic and realistic guidance you can actually follow.</p>
+          </article>
+          <article class="rounded-2xl border border-line bg-card p-5">
+            <h3 class="font-semibold">Science-based approach</h3>
+            <p class="mt-2 text-sm text-textMuted">Sleep timing principles, presented in simple language.</p>
+          </article>
+          <article class="rounded-2xl border border-line bg-card p-5">
+            <h3 class="font-semibold">Non-invasive routine</h3>
+            <p class="mt-2 text-sm text-textMuted">No complicated hardware. Just a better bedtime flow.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="mx-auto max-w-6xl px-4 py-12 sm:px-6">
+        <h2 class="text-2xl font-semibold sm:text-3xl">Trusted by sleepers rebuilding their routine</h2>
+        <div class="mt-7 grid gap-4 md:grid-cols-3">
+          <blockquote class="rounded-2xl border border-line bg-card p-5 text-sm text-textMuted">
+            "I wake up calmer now. The gentle alarm made mornings less stressful."
+          </blockquote>
+          <blockquote class="rounded-2xl border border-line bg-card p-5 text-sm text-textMuted">
+            "The wake-up window reduced my groggy mornings within days."
+          </blockquote>
+          <blockquote class="rounded-2xl border border-line bg-card p-5 text-sm text-textMuted">
+            "I like that recommendations are short and practical."
+          </blockquote>
+        </div>
+      </section>
+
+      <section id="cta" class="mx-auto max-w-6xl px-4 py-16 sm:px-6">
+        <div class="rounded-3xl border border-indigo-300/25 bg-gradient-to-r from-indigo-500/20 to-violet-500/20 p-8 text-center">
+          <h2 class="text-3xl font-semibold">Tonight can feel different.</h2>
+          <p class="mx-auto mt-3 max-w-2xl text-textMuted">
+            Start your sleep routine in 2 minutes and wake up with more energy tomorrow.
+          </p>
+          <div class="mt-7 flex flex-wrap items-center justify-center gap-3">
+            <a
+              href="#"
+              class="rounded-xl bg-accent px-6 py-3 text-sm font-semibold shadow-glow transition hover:-translate-y-0.5 hover:bg-indigo-400"
+              >Download for iOS</a
+            >
+            <a
+              href="#"
+              class="rounded-xl border border-line bg-white/5 px-6 py-3 text-sm font-semibold transition hover:bg-white/10"
+              >View Demo</a
+            >
+          </div>
+          <p class="mt-3 text-xs text-textMuted">Free to start - No credit card required</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="border-t border-line">
+      <div class="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 py-7 text-xs text-textMuted sm:flex-row sm:px-6">
+        <p>© 2026 SleepFlow</p>
+        <div class="flex gap-4">
+          <a href="#" class="hover:text-white">Privacy</a>
+          <a href="#" class="hover:text-white">Terms</a>
+          <a href="#" class="hover:text-white">Support</a>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>
