@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>We schedule your wake-up alarm so it can ring on the lock screen like the Clock app, including when the phone is muted.</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>We need access to Apple Music to play the song you choose as your alarm.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+</dict>
+</plist>

@@ -6,13 +6,31 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		72FF5A1B2F6B518D00C1D3F7 /* AlarmKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 72FF5A192F6B518D00C1D3F7 /* AlarmKit.framework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		72FF5A152F6B518D00C1D3F7 /* будильник.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "будильник.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		72FF5A192F6B518D00C1D3F7 /* AlarmKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AlarmKit.framework; path = System/Library/Frameworks/AlarmKit.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		72FF5A182F6B518D00C1D3F7 /* Exceptions for "будильник" folder in "будильник" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 72FF5A142F6B518D00C1D3F7 /* будильник */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		72FF5A172F6B518D00C1D3F7 /* будильник */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				72FF5A182F6B518D00C1D3F7 /* Exceptions for "будильник" folder in "будильник" target */,
+			);
 			path = "будильник";
 			sourceTree = "<group>";
 		};
@@ -23,17 +41,27 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				72FF5A1B2F6B518D00C1D3F7 /* AlarmKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		728AFF502F79DBC900F46B58 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				72FF5A192F6B518D00C1D3F7 /* AlarmKit.framework */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		72FF5A0C2F6B518D00C1D3F7 = {
 			isa = PBXGroup;
 			children = (
 				72FF5A172F6B518D00C1D3F7 /* будильник */,
 				72FF5A162F6B518D00C1D3F7 /* Products */,
+				728AFF502F79DBC900F46B58 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -251,6 +279,8 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "будильник/Info.plist";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "We need access to your music library so you can choose an alarm melody.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -295,6 +325,8 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "будильник/Info.plist";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "We need access to your music library so you can choose an alarm melody.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

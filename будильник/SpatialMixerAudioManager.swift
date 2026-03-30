@@ -110,12 +110,15 @@ final class SpatialMixerAudioManager {
 
     private func softnessMultiplier() -> Float {
         let s = min(max(softness, 0), 1)
-        return 0.68 + 0.32 * (1 - s)
+        // Выше softness → заметно тише и «мягче» (диапазон шире, чем раньше).
+        return 0.35 + 0.65 * (1 - s)
     }
 
     private func hzMultiplier() -> Float {
         let hz = min(max(brainHz, 120), 600)
-        return 0.86 + 0.14 * Float((hz - 120) / 480)
+        let t = Float((hz - 120) / 480)
+        // Нелинейно: сдвиг по Hz слышнее на краях диапазона.
+        return 0.52 + 0.55 * (t * t)
     }
 
     private func outputVolume(base: Float) -> Float {
@@ -124,7 +127,8 @@ final class SpatialMixerAudioManager {
 
     private func pan(for id: UUID) -> Float {
         let sp = min(max(space, 0), 1)
-        let w = Float((sp - 0.5) * 1.5)
+        // Полный стерео‑размах: «space» слышно как ширина панорамы.
+        let w = Float((sp - 0.5) * 2.0)
         let sign: Float = (abs(id.uuidString.hash) % 2 == 0) ? 1 : -1
         return min(1, max(-1, w * sign))
     }
@@ -234,8 +238,17 @@ final class SpatialMixerAudioManager {
     }
 
     private func configureAudioSession() throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers, .defaultToSpeaker])
-        try session.setActive(true)
+        try AudioManager.configureSleepPlaybackSession()
+    }
+
+    /// После ухода в фон / прерывания — снова активировать сессию и все слои (play() безопасен, если уже играет).
+    /// Восстанавливает громкость после незавершённого fade (иначе можно «играть» при volume 0).
+    func reassertPlaybackIfNeeded() {
+        guard isRunning, !players.isEmpty else { return }
+        try? AudioManager.configureSleepPlaybackSession()
+        applyOutputCurveToAll()
+        for (_, p) in players {
+            p.play()
+        }
     }
 }
