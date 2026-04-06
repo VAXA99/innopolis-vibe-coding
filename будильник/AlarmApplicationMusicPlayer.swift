@@ -10,6 +10,7 @@ enum AlarmApplicationMusicPlayer {
     }
 
     /// Как превью, плюс `repeatMode` и стартовая позиция.
+    /// Громкость трека из медиатеки задаёт система; программный crescendo для `MPMusicPlayerController` на iOS снят (`volume` недоступен).
     @MainActor
     static func playAlarmLoop(item: MPMediaItem, startTime: TimeInterval) {
         AlarmAppleMusicPlayback.ensureMPMusicPlayerNotificationsRegistered()

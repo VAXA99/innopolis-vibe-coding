@@ -189,11 +189,23 @@ final class AlarmManager {
     private let alarmIdentifier = "smart_alarm_wakeup"
     private let alarmFollowupPrefix = "smart_alarm_wakeup_followup"
     private let sleepTimerIdentifier = "smart_alarm_sleep_timer_end"
+    private let snoozeIdentifier = "smart_alarm_snooze"
     /// Max follow-ups we ever scheduled (cleanup only).
     private static let maxLegacyFollowups = 5
 
     init(center: UNUserNotificationCenter = .current()) {
         self.center = center
+    }
+
+    /// Убрать баннеры «Wake up» и отменить **только** отложенные follow-up напоминания — когда полный звук уже идёт в приложении.
+    /// Не снимает основной одноразовый будильник из очереди до срабатывания и не трогает pending snooze.
+    func clearWakeRemindersAfterInAppAlarmHandling() {
+        let followupIds = (1 ... Self.maxLegacyFollowups).map { "\(alarmFollowupPrefix)_\($0)" }
+        // Только follow-up из pending — не трогаем `smart_alarm_wakeup` и snooze, иначе при очистке старых баннеров сорвём ещё не прозвеневший будильник.
+        center.removePendingNotificationRequests(withIdentifiers: followupIds)
+        var surfaceIds = [alarmIdentifier, snoozeIdentifier]
+        surfaceIds += followupIds
+        center.removeDeliveredNotifications(withIdentifiers: surfaceIds)
     }
 
     /// Removes morning wake request(s), legacy follow-ups, and delivered copies — use when user clears the alarm or after handling wake.
@@ -203,7 +215,7 @@ final class AlarmManager {
             AlarmKitWakeScheduler.cancelScheduledWake()
         }
 #endif
-        var ids = [alarmIdentifier]
+        var ids = [alarmIdentifier, snoozeIdentifier]
         ids += (1...Self.maxLegacyFollowups).map { "\(alarmFollowupPrefix)_\($0)" }
         center.removePendingNotificationRequests(withIdentifiers: ids)
         center.removeDeliveredNotifications(withIdentifiers: ids)
@@ -214,17 +226,31 @@ final class AlarmManager {
         center.removeDeliveredNotifications(withIdentifiers: [sleepTimerIdentifier])
     }
 
-    /// Следующее время срабатывания утреннего `smart_alarm_wakeup` (если запланировано).
-    /// Нужно режиму сна с фоновым аудио: пока процесс жив, можно поднять Apple Music/полный звук в момент `fireDate`, без ожидания `willPresent` (он не вызывается при заблокированном экране).
-    func nextScheduledMainWakeFireDate() async -> Date? {
+    /// `UNNotificationTrigger` не объявляет `nextTriggerDate()` — только конкретные подклассы.
+    private func nextFireDate(for request: UNNotificationRequest) -> Date? {
+        guard let trigger = request.trigger else { return nil }
+        switch trigger {
+        case let t as UNCalendarNotificationTrigger:
+            return t.nextTriggerDate()
+        case let t as UNTimeIntervalNotificationTrigger:
+            return t.nextTriggerDate()
+        default:
+            return nil
+        }
+    }
+
+    /// Ближайшее из: основной будильник, snooze, follow-up (для монитора режима сна).
+    func nextScheduledAlarmFireDate() async -> Date? {
         await withCheckedContinuation { continuation in
             center.getPendingNotificationRequests { requests in
-                guard let req = requests.first(where: { $0.identifier == self.alarmIdentifier }),
-                      let cal = req.trigger as? UNCalendarNotificationTrigger else {
-                    continuation.resume(returning: nil)
-                    return
+                var dates: [Date] = []
+                for r in requests {
+                    let id = r.identifier
+                    if id == self.alarmIdentifier || id == self.snoozeIdentifier || id.hasPrefix(self.alarmFollowupPrefix) {
+                        if let d = self.nextFireDate(for: r) { dates.append(d) }
+                    }
                 }
-                continuation.resume(returning: cal.nextTriggerDate())
+                continuation.resume(returning: dates.min())
             }
         }
     }
@@ -240,14 +266,43 @@ final class AlarmManager {
 
     /// Schedules a one-time wake notification.
     /// - If `windowMinutes` is 0, fires exactly at `wakeTime` (next occurrence).
-    /// - If `windowMinutes` > 0, fires randomly in the wake window.
+    /// - If `windowMinutes` > 0, fires at the **middle** of the window (deterministic, testable).
+    /// Одноразовый snooze: через `minutesFromNow` (уведомление как у основного будильника).
+    func scheduleSnoozeNotification(minutesFromNow: Int, sound: AlarmSoundOption) async throws {
+        let settings = await center.notificationSettings()
+        switch settings.authorizationStatus {
+        case .authorized, .provisional:
+            break
+        default:
+            throw AlarmManagerError.notAuthorized
+        }
+        let followupIds = (1 ... Self.maxLegacyFollowups).map { "\(alarmFollowupPrefix)_\($0)" }
+        center.removePendingNotificationRequests(withIdentifiers: followupIds)
+        center.removeDeliveredNotifications(withIdentifiers: followupIds)
+        center.removePendingNotificationRequests(withIdentifiers: [snoozeIdentifier])
+        center.removeDeliveredNotifications(withIdentifiers: [snoozeIdentifier])
+
+        let sec = max(60, minutesFromNow * 60)
+        let content = UNMutableNotificationContent()
+        content.title = "Wake up"
+        content.body = "Snooze ended."
+        content.sound = AlarmWakeNotificationSound.resolved(for: sound)
+        if #available(iOS 15.0, *) {
+            content.interruptionLevel = .timeSensitive
+        }
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: TimeInterval(sec), repeats: false)
+        let request = UNNotificationRequest(identifier: snoozeIdentifier, content: content, trigger: trigger)
+        try await center.add(request)
+    }
+
     @discardableResult
     func scheduleWakeUpNotification(
         wakeTime: Date,
         windowMinutes: Int = 30,
         sound: AlarmSoundOption = .mechDigitalBuzzer,
         followupCount: Int = 0,
-        followupIntervalMinutes: Int = 2
+        followupIntervalMinutes: Int = 2,
+        weekdays: Set<Int> = AlarmBehaviorSettings.weekdayMask
     ) async throws -> Date {
         let settings = await center.notificationSettings()
         switch settings.authorizationStatus {
@@ -266,16 +321,13 @@ final class AlarmManager {
             throw AlarmManagerError.invalidTime
         }
 
-        // Next occurrence of (hour, minute).
-        var targetComponents = calendar.dateComponents([.year, .month, .day], from: now)
-        targetComponents.hour = hour
-        targetComponents.minute = minute
-        targetComponents.second = 0
-
-        var targetDate = calendar.date(from: targetComponents) ?? wakeTime
-        if targetDate <= now {
-            targetDate = calendar.date(byAdding: .day, value: 1, to: targetDate) ?? targetDate
-        }
+        let targetDate = AlarmScheduling.nextOccurrence(
+            hour: hour,
+            minute: minute,
+            weekdays: weekdays,
+            from: now,
+            calendar: calendar
+        )
 
         let fireDate: Date
         if windowMinutes <= 0 {
@@ -286,30 +338,22 @@ final class AlarmManager {
             if earliestFireDate >= targetDate {
                 fireDate = max(targetDate, now.addingTimeInterval(1))
             } else {
-                let totalSeconds = Int(targetDate.timeIntervalSince(earliestFireDate))
-                let offsetSeconds = Int.random(in: 0...max(0, totalSeconds))
-                fireDate = earliestFireDate.addingTimeInterval(TimeInterval(offsetSeconds))
+                // Середина окна [earliestFireDate, targetDate] — без random, предсказуемо для пользователя и тестов.
+                let span = targetDate.timeIntervalSince(earliestFireDate)
+                fireDate = earliestFireDate.addingTimeInterval(span / 2)
             }
         }
 
-        var idsToRemove = [alarmIdentifier]
+        var idsToRemove = [alarmIdentifier, snoozeIdentifier]
         idsToRemove += (1...Self.maxLegacyFollowups).map { "\(alarmFollowupPrefix)_\($0)" }
         center.removePendingNotificationRequests(withIdentifiers: idsToRemove)
         center.removeDeliveredNotifications(withIdentifiers: idsToRemove)
 
 #if canImport(AlarmKit) && os(iOS)
-        // AlarmKit не ставит UNNotification — при убитом процессе нечего поймать в reconcile.
-        // Для «Файлы» и Apple Music нужен гарантированный локальный запрос + полный звук в приложении.
+        // Старый путь: AlarmKit без UN ломал `nextScheduledMainWakeFireDate` и монитор сна.
+        // Всегда ставим локальное уведомление; старый AlarmKit-будильник снимаем, чтобы не было дублей.
         if #available(iOS 26.0, *) {
-            if AlarmWakeSoundModeStorage.resolvedMode() == .builtIn {
-                do {
-                    if try await AlarmKitWakeScheduler.scheduleMainWake(fireDate: fireDate, sound: sound) {
-                        return fireDate
-                    }
-                } catch {
-                    // Fallback: локальное уведомление ниже.
-                }
-            }
+            AlarmKitWakeScheduler.cancelScheduledWake()
         }
 #endif
 
@@ -335,7 +379,7 @@ final class AlarmManager {
                 let followupTrigger = UNCalendarNotificationTrigger(dateMatching: followupComponents, repeats: false)
                 let followupContent = UNMutableNotificationContent()
                 followupContent.title = "Wake up"
-                followupContent.body = "Alarm reminder \(idx)"
+                followupContent.body = "Still need to get up? Open the app."
                 followupContent.sound = AlarmWakeNotificationSound.resolved(for: sound)
                 if #available(iOS 15.0, *) {
                     followupContent.interruptionLevel = .timeSensitive

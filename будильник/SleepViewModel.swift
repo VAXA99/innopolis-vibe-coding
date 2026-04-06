@@ -69,12 +69,16 @@ final class SleepViewModel: ObservableObject {
     private let alarmRingPlayer = AlarmRingPlayer()
     private let alarmNotificationManager = AlarmManager()
     private var usesSpatialMix = false
+    /// Нет ни spatial-микса, ни одиночного sleep-аудио — только таймер (пользователь не добавил звуки на круг).
+    private var sleepSessionSilentNoPlayback = false
 
     private static let savedAlarmSoundKey = "smartAlarm.selectedSound"
 
     private static let persistSleepActiveKey = "sleepSession.persist.active"
     private static let persistSleepStartKey = "sleepSession.persist.start"
     private static let persistSleepTimerMinutesKey = "sleepSession.persist.timerMinutes"
+    /// Нет звуков на платформе — сессия без фонового саундскейпа (только таймер).
+    private static let persistSleepNoSoundscapeKey = "sleepSession.persist.noSoundscape"
 
     /// Sounds placed on the spatial platform (Step 2). Empty => legacy single-sound path.
     @Published var spatialPlacedSounds: [SpatialPlacedSound] = []
@@ -90,6 +94,8 @@ final class SleepViewModel: ObservableObject {
     private var sleepAudioWatchdog: Timer?
     /// Пока звонит будильник — поднимаем AVAudioPlayer / Apple Music.
     private var alarmRingWatchdog: Timer?
+    /// Сколько раз нажали Snooze в текущей серии звонков (сброс при «I'm awake» и новом Go to Sleep).
+    @Published private(set) var snoozeCountForCurrentRing: Int = 0
 
     init(audioManager: AudioManager = AudioManager()) {
         self.audioManager = audioManager
@@ -163,9 +169,13 @@ final class SleepViewModel: ObservableObject {
         spatialPlacedSounds[i] = item
     }
 
-    /// Live preview — incremental: existing layers keep playing; new layers fade in; no full stop/rebuild.
+    /// Превью до сна или живое обновление микса, пока идёт таймер сна (тот же экран, что шаг 2).
     func syncSpatialPreview() {
-        guard !isRunning else { return }
+        if isRunning {
+            guard sleepUIMode == .sleeping else { return }
+            applyLiveSpatialMixWhileSleeping()
+            return
+        }
         spatialPreviewGeneration += 1
         let gen = spatialPreviewGeneration
         Task { @MainActor [weak self] in
@@ -185,6 +195,34 @@ final class SleepViewModel: ObservableObject {
                 brainFrequencyHz: Float(self.brainFrequencyHz)
             )
         }
+    }
+
+    /// Один код-путь со `startSleep()` при непустом spatial: надёжнее, чем отдельный `AudioManager.startSleep` с тихого таймера.
+    private func applyLiveSpatialMixWhileSleeping() {
+        if spatialPlacedSounds.isEmpty {
+            spatialMixer.stop()
+            usesSpatialMix = false
+            sleepSessionSilentNoPlayback = true
+            publishSleepNowPlayingIfRunning()
+            persistSleepSessionState()
+            return
+        }
+        if !usesSpatialMix, !sleepSessionSilentNoPlayback {
+            audioManager.stopPlaybackSilently()
+        }
+        sleepSessionSilentNoPlayback = false
+        usesSpatialMix = true
+        selectedSound = dominantSpatialSound()
+        let vols = SpatialPlacedSound.normalizedVolumes(for: spatialPlacedSounds)
+        spatialMixer.sync(
+            placed: spatialPlacedSounds,
+            volumes: vols,
+            softness: Float(softness),
+            space: Float(space),
+            brainFrequencyHz: Float(brainFrequencyHz)
+        )
+        publishSleepNowPlayingIfRunning()
+        persistSleepSessionState()
     }
 
     /// Quick tone recipes (Hz + softness + space). Exploratory — not medical advice.
@@ -209,7 +247,7 @@ final class SleepViewModel: ObservableObject {
     /// Slider changes while previewing (volume + stereo width curve — no engine rebuild).
     func applySpatialMasterEffects() {
         guard !spatialPlacedSounds.isEmpty else { return }
-        if isRunning && !usesSpatialMix { return }
+        if isRunning, !usesSpatialMix { return }
         spatialMixer.updateGlobalEffects(
             softness: Float(softness),
             space: Float(space),
@@ -219,14 +257,14 @@ final class SleepViewModel: ObservableObject {
 
     /// Only rebalance volumes while dragging nodes (no engine restart).
     func updateSpatialMixVolumes() {
-        guard !isRunning else { return }
+        guard !isRunning || sleepUIMode == .sleeping else { return }
         let vols = SpatialPlacedSound.normalizedVolumes(for: spatialPlacedSounds)
         spatialMixer.updateVolumes(vols)
     }
 
     /// Live volume preview while dragging — uses temporary offsets without publishing every frame.
     func updateSpatialMixVolumesWithOverrides(_ unitOffsetsById: [UUID: CGPoint]) {
-        guard !isRunning else { return }
+        guard !isRunning || sleepUIMode == .sleeping else { return }
         var items = spatialPlacedSounds
         for (id, pt) in unitOffsetsById {
             guard let i = items.firstIndex(where: { $0.id == id }) else { continue }
@@ -248,7 +286,7 @@ final class SleepViewModel: ObservableObject {
     /// Label for sleep mode UI (dominant layer + layer count).
     func mixSummaryLabel() -> String {
         if spatialPlacedSounds.isEmpty {
-            return selectedSound.displayName
+            return "Silent (timer only)"
         }
         let dominant = dominantSpatialSound()
         let count = spatialPlacedSounds.count
@@ -260,12 +298,14 @@ final class SleepViewModel: ObservableObject {
         UserDefaults.standard.set(true, forKey: Self.persistSleepActiveKey)
         UserDefaults.standard.set(start.timeIntervalSince1970, forKey: Self.persistSleepStartKey)
         UserDefaults.standard.set(timerMinutes, forKey: Self.persistSleepTimerMinutesKey)
+        UserDefaults.standard.set(sleepSessionSilentNoPlayback, forKey: Self.persistSleepNoSoundscapeKey)
     }
 
     private static func clearPersistedSleepSessionState() {
         UserDefaults.standard.set(false, forKey: persistSleepActiveKey)
         UserDefaults.standard.removeObject(forKey: persistSleepStartKey)
         UserDefaults.standard.removeObject(forKey: persistSleepTimerMinutesKey)
+        UserDefaults.standard.removeObject(forKey: persistSleepNoSoundscapeKey)
     }
 
     /// После выгрузки приложения восстанавливаем таймер и при необходимости включаем будильник.
@@ -316,6 +356,14 @@ final class SleepViewModel: ObservableObject {
 
     private func resumeSleepAudioAfterRestoreIfNeeded() {
         guard isRunning, sleepUIMode == .sleeping else { return }
+        sleepSessionSilentNoPlayback = UserDefaults.standard.bool(forKey: Self.persistSleepNoSoundscapeKey)
+        if sleepSessionSilentNoPlayback {
+            usesSpatialMix = false
+            publishSleepNowPlayingIfRunning()
+            startSleepAudioWatchdog()
+            startMorningWakeMonitorIfNeeded()
+            return
+        }
         if !spatialPlacedSounds.isEmpty {
             usesSpatialMix = true
             selectedSound = dominantSpatialSound()
@@ -353,6 +401,7 @@ final class SleepViewModel: ObservableObject {
 
     func startSleep() {
         guard !isRunning else { return }
+        snoozeCountForCurrentRing = 0
         isRunning = true
         sleepUIMode = .sleeping
         didFinishSession = false
@@ -360,12 +409,11 @@ final class SleepViewModel: ObservableObject {
         remainingSeconds = max(0, timerMinutes * 60)
         scheduleSleepEndNotificationIfPossible()
         startCountdown()
-        publishSleepNowPlayingIfRunning()
         startSleepAudioWatchdog()
         startMorningWakeMonitorIfNeeded()
-        persistSleepSessionState()
 
         if !spatialPlacedSounds.isEmpty {
+            sleepSessionSilentNoPlayback = false
             usesSpatialMix = true
             selectedSound = dominantSpatialSound()
             let vols = SpatialPlacedSound.normalizedVolumes(for: spatialPlacedSounds)
@@ -376,27 +424,15 @@ final class SleepViewModel: ObservableObject {
                 space: Float(space),
                 brainFrequencyHz: Float(brainFrequencyHz)
             )
+            publishSleepNowPlayingIfRunning()
+            persistSleepSessionState()
             return
         }
 
+        sleepSessionSilentNoPlayback = true
         usesSpatialMix = false
-        let sound = selectedSound
-        let volume = Float(self.volume)
-        let softness = Float(self.softness)
-        let space = Float(self.space)
-        let durationMinutes = timerMinutes
-
-        Task { [weak self] in
-            guard let self else { return }
-            await self.audioManager.startSleep(
-                sound: sound,
-                volume: volume,
-                softness: softness,
-                space: space,
-                brainFrequencyHz: Float(self.brainFrequencyHz),
-                durationMinutes: durationMinutes
-            ) { }
-        }
+        publishSleepNowPlayingIfRunning()
+        persistSleepSessionState()
     }
 
     func stopSleep() {
@@ -410,20 +446,50 @@ final class SleepViewModel: ObservableObject {
         if usesSpatialMix {
             spatialMixer.stop()
             usesSpatialMix = false
-        } else {
+        } else if !sleepSessionSilentNoPlayback {
             audioManager.stopSleep()
         }
+        sleepSessionSilentNoPlayback = false
         finishSession(stoppedEarly: true)
     }
 
     /// Пользователь выключил будильник после окончания таймера.
     func dismissAlarmAndFinish() {
         guard isRunning, sleepUIMode == .alarmRinging else { return }
+        snoozeCountForCurrentRing = 0
         alarmRingPlayer.stop()
         AlarmPlaybackAnchor.clear()
         alarmNotificationManager.cancelSleepTimerNotification()
+        // Снять основной + все отложенные «Alarm reminder N», иначе через пару минут снова прилетит уведомление.
+        alarmNotificationManager.cancelScheduledMorningAlarm()
+        NotificationCenter.default.post(name: .userDismissedMorningAlarm, object: nil)
         sleepUIMode = .sleeping
         finishSession(stoppedEarly: false)
+    }
+
+    var canSnoozeFromAlarm: Bool {
+        guard AlarmBehaviorSettings.isSnoozeEnabled else { return false }
+        let maxC = AlarmBehaviorSettings.snoozeMaxCount
+        if maxC == 0 { return true }
+        return snoozeCountForCurrentRing < maxC
+    }
+
+    /// Отложить на интервал из настроек; снова в режим сна до следующего уведомления.
+    func snoozeFromAlarm() async {
+        guard isRunning, sleepUIMode == .alarmRinging else { return }
+        guard canSnoozeFromAlarm else { return }
+        let minutes = AlarmBehaviorSettings.snoozeIntervalMinutes
+        let sound = Self.loadSavedAlarmSound()
+        do {
+            try await alarmNotificationManager.scheduleSnoozeNotification(minutesFromNow: minutes, sound: sound)
+        } catch {
+            return
+        }
+        snoozeCountForCurrentRing += 1
+        stopAlarmRingWatchdog()
+        alarmRingPlayer.stop()
+        sleepUIMode = .sleeping
+        startMorningWakeMonitorIfNeeded()
     }
 
     func previewSelectedSound() {
@@ -437,6 +503,7 @@ final class SleepViewModel: ObservableObject {
 
     func applySoundSettingsIfRunning() {
         guard isRunning else { return }
+        guard !sleepSessionSilentNoPlayback else { return }
         if usesSpatialMix {
             spatialMixer.updateGlobalEffects(
                 softness: Float(softness),
@@ -463,7 +530,7 @@ final class SleepViewModel: ObservableObject {
                     self.isRunning && self.sleepUIMode == .sleeping
                 }
                 guard stillSleeping else { return }
-                guard let fireDate = await self.alarmNotificationManager.nextScheduledMainWakeFireDate() else { continue }
+                guard let fireDate = await self.alarmNotificationManager.nextScheduledAlarmFireDate() else { continue }
                 let shouldRing = await MainActor.run {
                     self.isRunning && self.sleepUIMode == .sleeping && Date() >= fireDate.addingTimeInterval(-1.5)
                 }
@@ -503,9 +570,10 @@ final class SleepViewModel: ObservableObject {
         if usesSpatialMix {
             spatialMixer.stop()
             usesSpatialMix = false
-        } else {
+        } else if !sleepSessionSilentNoPlayback {
             audioManager.stopPlaybackSilently()
         }
+        sleepSessionSilentNoPlayback = false
         // Таймер засыпания завершает сессию тихо: останавливаем «сон» без запуска утреннего будильника.
         alarmNotificationManager.cancelSleepTimerNotification()
         finishSession(stoppedEarly: false)
@@ -514,6 +582,7 @@ final class SleepViewModel: ObservableObject {
     /// - `usePlaybackAnchor`: `false` для окончания таймера сна в приложении (начать с нуля); `true` если сработал системный будильник/уведомление.
     private func beginAlarmRinging(usePlaybackAnchor: Bool) {
         guard sleepUIMode != .alarmRinging else { return }
+        alarmNotificationManager.clearWakeRemindersAfterInAppAlarmHandling()
         stopMorningWakeMonitor()
         stopSleepAudioWatchdog()
         alarmNotificationManager.cancelSleepTimerNotification()
@@ -531,9 +600,10 @@ final class SleepViewModel: ObservableObject {
         if usesSpatialMix {
             spatialMixer.stop()
             usesSpatialMix = false
-        } else {
+        } else if !sleepSessionSilentNoPlayback {
             audioManager.stopPlaybackSilently()
         }
+        sleepSessionSilentNoPlayback = false
         beginAlarmRinging(usePlaybackAnchor: true)
     }
 
@@ -560,6 +630,7 @@ final class SleepViewModel: ObservableObject {
     private func finishSession(stoppedEarly: Bool) {
         guard !didFinishSession else { return }
         didFinishSession = true
+        sleepSessionSilentNoPlayback = false
         Self.clearPersistedSleepSessionState()
         stopMorningWakeMonitor()
         stopSleepAudioWatchdog()
@@ -646,7 +717,11 @@ final class SleepViewModel: ObservableObject {
 
     private func publishSleepNowPlayingIfRunning() {
         guard isRunning else { return }
-        AudioManager.publishSleepNowPlaying(title: "Sleep mix", subtitle: mixSummaryLabel())
+        if sleepSessionSilentNoPlayback {
+            AudioManager.publishSleepNowPlaying(title: "Sleep", subtitle: "Timer only — no soundscape")
+        } else {
+            AudioManager.publishSleepNowPlaying(title: "Sleep mix", subtitle: mixSummaryLabel())
+        }
     }
 
     private func startSleepAudioWatchdog() {
@@ -690,6 +765,7 @@ final class SleepViewModel: ObservableObject {
 
     private func tickSleepAudioWatchdog() {
         guard isRunning, sleepUIMode == .sleeping else { return }
+        guard !sleepSessionSilentNoPlayback else { return }
         try? AudioManager.configureSleepPlaybackSession()
         if usesSpatialMix {
             spatialMixer.reassertPlaybackIfNeeded()
@@ -701,6 +777,7 @@ final class SleepViewModel: ObservableObject {
 
     private func reassertSleepAudioAfterBackgroundEvent() {
         guard isRunning, sleepUIMode == .sleeping else { return }
+        guard !sleepSessionSilentNoPlayback else { return }
         if usesSpatialMix {
             spatialMixer.reassertPlaybackIfNeeded()
         } else {

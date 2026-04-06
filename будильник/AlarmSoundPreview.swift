@@ -7,7 +7,8 @@ enum AlarmSoundPreview {
     private static var stopWorkItem: DispatchWorkItem?
 
     /// Предпросмотр файла из «Файлы» (короткий фрагмент).
-    static func playFile(at url: URL, previewDuration: TimeInterval = 5.0) {
+    /// Предпросмотр в настройках (не длина реального будильника в приложении — он играет в цикле).
+    static func playFile(at url: URL, previewDuration: TimeInterval = 25.0) {
         player?.stop()
         player = nil
         stopWorkItem?.cancel()
@@ -60,7 +61,7 @@ enum AlarmSoundPreview {
         }
     }
 
-    static func play(_ option: AlarmSoundOption, previewDuration: TimeInterval = 5.0) {
+    static func play(_ option: AlarmSoundOption, previewDuration: TimeInterval = 25.0) {
         player?.stop()
         player = nil
         stopWorkItem?.cancel()

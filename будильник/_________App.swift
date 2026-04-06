@@ -8,11 +8,15 @@ import AVFoundation
 
 extension Notification.Name {
     static let smartAlarmDidFire = Notification.Name("smartAlarmDidFire")
+    /// `userInfo` key: `Date` срабатывания уведомления — чтобы не запускать будильник повторно при каждом входе в приложение.
+    static let smartAlarmFireDateUserInfoKey = "smartAlarm.fireDate"
     static let sleepTimerDidEnd = Notification.Name("sleepTimerDidEnd")
     /// Lock screen / AirPods: user tapped Play — поднять сон-микс снова.
     static let sleepPlaybackRemotePlay = Notification.Name("sleepPlaybackRemotePlay")
     /// Пауза/стоп с экрана блокировки — остановить будильник и Apple Music.
     static let alarmRemoteStopRequested = Notification.Name("alarmRemoteStopRequested")
+    /// Пользователь подтвердил пробуждение — снять отложенные «reminder» и флаг запланированного утра.
+    static let userDismissedMorningAlarm = Notification.Name("userDismissedMorningAlarm")
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -59,9 +63,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
         let id = notification.request.identifier
-        if id == "smart_alarm_wakeup" || id.hasPrefix("smart_alarm_wakeup_followup") {
+        if id == "smart_alarm_wakeup" || id == "smart_alarm_snooze" || id.hasPrefix("smart_alarm_wakeup_followup") {
             AlarmPlaybackAnchor.recordIfNeeded(notification.date)
-            NotificationCenter.default.post(name: .smartAlarmDidFire, object: nil)
+            AlarmManager().clearWakeRemindersAfterInAppAlarmHandling()
+            NotificationCenter.default.post(
+                name: .smartAlarmDidFire,
+                object: nil,
+                userInfo: [Notification.Name.smartAlarmFireDateUserInfoKey: notification.date]
+            )
         } else if id == "smart_alarm_sleep_timer_end" {
             NotificationCenter.default.post(name: .sleepTimerDidEnd, object: nil)
         }
@@ -79,10 +88,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didReceive response: UNNotificationResponse
     ) async {
         let id = response.notification.request.identifier
-        if id == "smart_alarm_wakeup" || id.hasPrefix("smart_alarm_wakeup_followup") {
+        if id == "smart_alarm_wakeup" || id == "smart_alarm_snooze" || id.hasPrefix("smart_alarm_wakeup_followup") {
             AlarmPlaybackAnchor.recordIfNeeded(response.notification.date)
-            NotificationCenter.default.post(name: .smartAlarmDidFire, object: nil)
-            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
+            AlarmManager().clearWakeRemindersAfterInAppAlarmHandling()
+            NotificationCenter.default.post(
+                name: .smartAlarmDidFire,
+                object: nil,
+                userInfo: [Notification.Name.smartAlarmFireDateUserInfoKey: response.notification.date]
+            )
         } else if id == "smart_alarm_sleep_timer_end" {
             NotificationCenter.default.post(name: .sleepTimerDidEnd, object: nil)
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])

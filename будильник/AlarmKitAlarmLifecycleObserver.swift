@@ -25,7 +25,11 @@ enum AlarmKitAlarmLifecycleObserver {
                         if !lastPostedAlerting {
                             lastPostedAlerting = true
                             try? AlarmKit.AlarmManager.shared.stop(id: wanted)
-                            NotificationCenter.default.post(name: .smartAlarmDidFire, object: nil)
+                            NotificationCenter.default.post(
+                                name: .smartAlarmDidFire,
+                                object: nil,
+                                userInfo: [Notification.Name.smartAlarmFireDateUserInfoKey: Date()]
+                            )
                         }
                     } else {
                         lastPostedAlerting = false

@@ -2,6 +2,7 @@ import AVFoundation
 import Combine
 import Foundation
 #if canImport(UIKit) && os(iOS)
+import AudioToolbox
 import UIKit
 #endif
 #if canImport(MediaPlayer) && os(iOS)
@@ -21,6 +22,7 @@ final class AlarmRingPlayer {
     private var vibrateTimer: Timer?
 #if canImport(UIKit) && os(iOS)
     private var alarmHaptics: UIImpactFeedbackGenerator?
+    private var vibrationWorkItems: [DispatchWorkItem] = []
 #endif
 #if canImport(MediaPlayer) && os(iOS)
     private let musicPlayer = MPMusicPlayerController.applicationMusicPlayer
@@ -30,6 +32,7 @@ final class AlarmRingPlayer {
     /// Когда играет `ApplicationMusicPlayer` (каталог по Store ID) — не смешивать с `MPMusicPlayerController` в reassert/stop.
     private var usesMusicKitPlayback = false
 #endif
+    private var crescendoTimer: Timer?
     /// `usePlaybackAnchor`: если будильник уже играл с экрана блокировки — продолжить с той же позиции (см. `AlarmPlaybackAnchor`).
     func start(option: AlarmSoundOption, usePlaybackAnchor: Bool = true) {
         let elapsed = usePlaybackAnchor ? (AlarmPlaybackAnchor.elapsedSinceRecordedStart() ?? 0) : 0
@@ -57,9 +60,9 @@ final class AlarmRingPlayer {
             #endif
             let p = try AVAudioPlayer(contentsOf: url)
             p.numberOfLoops = -1
-            p.volume = option.category == .musical ? 0.92 : 1.0
             p.prepareToPlay()
             p.currentTime = applyPlaybackOffset(elapsed: elapsed, duration: p.duration)
+            applyVolumeAndOptionalCrescendo(player: p, option: option)
             p.play()
             player = p
             startAlarmVibrationLoop()
@@ -69,9 +72,12 @@ final class AlarmRingPlayer {
     }
 
     func stop() {
+        crescendoTimer?.invalidate()
+        crescendoTimer = nil
         vibrateTimer?.invalidate()
         vibrateTimer = nil
 #if canImport(UIKit) && os(iOS)
+        cancelPendingVibrationWorkItems()
         alarmHaptics = nil
 #endif
         if let o = fileLoopEndObserver {
@@ -138,26 +144,175 @@ final class AlarmRingPlayer {
         #endif
     }
 
+    private func baseVolume(for option: AlarmSoundOption) -> Float {
+        let cat: Float = option.category == .musical ? 0.92 : 1.0
+        return Float(AlarmBehaviorSettings.alarmVolumeMultiplier) * cat
+    }
+
+    /// Плавная S-кривая 0…1 для громкости (медленный старт и финиш).
+    private static func smoothCrescendoProgress(linear: Float) -> Float {
+        let t = min(1, max(0, linear))
+        return t * t * (3 - 2 * t)
+    }
+
+    private func startCrescendo(on player: AVAudioPlayer, endVolume: Float, duration: TimeInterval) {
+        crescendoTimer?.invalidate()
+        let steps = max(8, Int(duration / 0.25))
+        let startV = min(0.12, max(0.05, endVolume * 0.18))
+        player.volume = startV
+        var step = 0
+        let timer = Timer.scheduledTimer(withTimeInterval: duration / Double(steps), repeats: true) { [weak self, weak player] t in
+            guard let player else {
+                t.invalidate()
+                return
+            }
+            step += 1
+            let linear = min(1, Float(step) / Float(steps))
+            let r = Self.smoothCrescendoProgress(linear: linear)
+            player.volume = startV + (endVolume - startV) * r
+            if step >= steps {
+                t.invalidate()
+                player.volume = endVolume
+                self?.crescendoTimer = nil
+            }
+        }
+        crescendoTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func startCrescendoAVPlayer(player: AVPlayer, endVolume: Float, duration: TimeInterval) {
+        crescendoTimer?.invalidate()
+        let steps = max(8, Int(duration / 0.25))
+        let startV = min(0.12, max(0.05, endVolume * 0.18))
+        player.volume = startV
+        var step = 0
+        let timer = Timer.scheduledTimer(withTimeInterval: duration / Double(steps), repeats: true) { [weak self, weak player] t in
+            guard let player else {
+                t.invalidate()
+                return
+            }
+            step += 1
+            let linear = min(1, Float(step) / Float(steps))
+            let r = Self.smoothCrescendoProgress(linear: linear)
+            player.volume = startV + (endVolume - startV) * r
+            if step >= steps {
+                t.invalidate()
+                player.volume = endVolume
+                self?.crescendoTimer = nil
+            }
+        }
+        crescendoTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func applyVolumeAndOptionalCrescendo(player: AVAudioPlayer, option: AlarmSoundOption) {
+        let end = min(1, max(0.05, baseVolume(for: option)))
+        guard AlarmBehaviorSettings.isCrescendoEnabled else {
+            player.volume = end
+            return
+        }
+        let dur = TimeInterval(AlarmBehaviorSettings.crescendoRampSeconds)
+        startCrescendo(on: player, endVolume: end, duration: dur)
+    }
+
+    private func applyVolumeAndOptionalCrescendoAVPlayer(player: AVPlayer, option: AlarmSoundOption) {
+        let end = min(1, max(0.05, baseVolume(for: option)))
+        guard AlarmBehaviorSettings.isCrescendoEnabled else {
+            player.volume = end
+            return
+        }
+        let dur = TimeInterval(AlarmBehaviorSettings.crescendoRampSeconds)
+        startCrescendoAVPlayer(player: player, endVolume: end, duration: dur)
+    }
+
     private func applyPlaybackOffset(elapsed: TimeInterval, duration: TimeInterval) -> TimeInterval {
         guard duration > 0.05, elapsed.isFinite, elapsed > 0 else { return 0 }
         return elapsed.truncatingRemainder(dividingBy: duration)
     }
 
-    /// Вибрация вместе с рингтоном: достаточно, чтобы разбудить, без «дрели».
+    /// Вибрация: стандартный режим или записанный рисунок (повтор цикла с паузой).
     private func startAlarmVibrationLoop() {
         #if canImport(UIKit) && os(iOS)
-        let gen = UIImpactFeedbackGenerator(style: .soft)
+        guard AlarmVibrationSettings.isEnabled else { return }
+        switch AlarmVibrationSettings.mode {
+        case .customPattern:
+            let samples = AlarmVibrationSettings.loadCustomPattern()
+            guard !samples.isEmpty else {
+                startAlarmVibrationLoopStandard()
+                return
+            }
+            prepareImpactGeneratorForCustomPattern()
+            let patternEnd = (samples.map(\.offset).max() ?? 0) + 0.12
+            let period = patternEnd + AlarmVibrationSettings.patternRepeatGapSeconds
+            playCustomVibrationPattern(samples: samples)
+            let vt = Timer.scheduledTimer(withTimeInterval: max(0.35, period), repeats: true) { [weak self] _ in
+                self?.playCustomVibrationPattern(samples: samples)
+            }
+            vibrateTimer = vt
+            RunLoop.main.add(vt, forMode: .common)
+        case .standard:
+            startAlarmVibrationLoopStandard()
+        }
+        #endif
+    }
+
+    #if canImport(UIKit) && os(iOS)
+    private func prepareImpactGeneratorForCustomPattern() {
+        let gen = UIImpactFeedbackGenerator(style: .heavy)
         gen.prepare()
         alarmHaptics = gen
-        let vt = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
+    }
+
+    private func cancelPendingVibrationWorkItems() {
+        vibrationWorkItems.forEach { $0.cancel() }
+        vibrationWorkItems.removeAll()
+    }
+
+    private func playCustomVibrationPattern(samples: [AlarmVibrationSettings.PatternSample]) {
+        cancelPendingVibrationWorkItems()
+        for s in samples {
+            let item = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                if s.systemBuzz {
+                    AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
+                }
+                self.alarmHaptics?.impactOccurred(intensity: CGFloat(s.intensity))
+                self.alarmHaptics?.prepare()
+            }
+            vibrationWorkItems.append(item)
+            DispatchQueue.main.asyncAfter(deadline: .now() + s.offset, execute: item)
+        }
+    }
+
+    private func startAlarmVibrationLoopStandard() {
+        guard AlarmVibrationSettings.isEnabled else { return }
+        let interval = AlarmVibrationSettings.pulseIntervalSeconds
+        let style = AlarmVibrationSettings.style
+        if style == .gentle || style == .both {
+            let gen = UIImpactFeedbackGenerator(style: .medium)
+            gen.prepare()
+            alarmHaptics = gen
+        } else {
+            alarmHaptics = nil
+        }
+        let vt = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             guard let self else { return }
-            self.alarmHaptics?.impactOccurred(intensity: 0.5)
-            self.alarmHaptics?.prepare()
+            switch AlarmVibrationSettings.style {
+            case .gentle:
+                self.alarmHaptics?.impactOccurred(intensity: 0.68)
+                self.alarmHaptics?.prepare()
+            case .strong:
+                AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
+            case .both:
+                AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
+                self.alarmHaptics?.impactOccurred(intensity: 0.52)
+                self.alarmHaptics?.prepare()
+            }
         }
         vibrateTimer = vt
         RunLoop.main.add(vt, forMode: .common)
-        #endif
     }
+    #endif
 
     /// Если трек из медиатеки не поднялся — встроенные музыкальные mp3 из `Ringtones/Musical` (без отдельных wav в корне бандла).
     private func startBundledFallbackMusicalAlarm(elapsed: TimeInterval) {
@@ -177,9 +332,9 @@ final class AlarmRingPlayer {
                 #endif
                 let p = try AVAudioPlayer(contentsOf: finalURL)
                 p.numberOfLoops = -1
-                p.volume = opt.category == .musical ? 0.92 : 1.0
                 p.prepareToPlay()
                 p.currentTime = applyPlaybackOffset(elapsed: elapsed, duration: p.duration)
+                applyVolumeAndOptionalCrescendo(player: p, option: opt)
                 p.play()
                 player = p
                 startAlarmVibrationLoop()
@@ -201,9 +356,9 @@ final class AlarmRingPlayer {
             #endif
             let p = try AVAudioPlayer(contentsOf: url)
             p.numberOfLoops = -1
-            p.volume = 1.0
             p.prepareToPlay()
             p.currentTime = applyPlaybackOffset(elapsed: elapsed, duration: p.duration)
+            applyVolumeAndOptionalCrescendo(player: p, option: .mechDigitalBuzzer)
             if p.play() {
                 player = p
                 return true
@@ -222,7 +377,7 @@ final class AlarmRingPlayer {
         #endif
         let item = AVPlayerItem(url: url)
         let pl = AVPlayer(playerItem: item)
-        pl.volume = 1.0
+        applyVolumeAndOptionalCrescendoAVPlayer(player: pl, option: .mechDigitalBuzzer)
         fileLoopEndObserver = NotificationCenter.default.addObserver(
             forName: AVPlayerItem.didPlayToEndTimeNotification,
             object: item,
