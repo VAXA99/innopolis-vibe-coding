@@ -34,6 +34,39 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, service: "huawei-sync-server" });
     }
 
+    /** HTML-дашборд: список зарегистрированных пользователей. Защита: ?token=API_TOKEN или Authorization: Bearer */
+    if (req.method === "GET" && pathname === "/admin") {
+      if (!isAdminDashboardAuthorized(req, url)) {
+        return sendHtml(
+          res,
+          401,
+          `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Доступ</title></head>
+          <body style="font-family:system-ui,sans-serif;padding:24px;max-width:520px;">
+          <h2>Нужен ключ доступа</h2>
+          <p>Откройте страницу с параметром <code>?token=</code> — значение из переменной <strong>API_TOKEN</strong> на Render (Environment).</p>
+          <p>Пример: <code>/admin?token=ВАШ_ТОКЕН</code></p>
+          </body></html>`
+        );
+      }
+      return sendHtml(res, 200, buildAdminDashboardHtml());
+    }
+
+    /** JSON-список пользователей (без паролей) для скриптов / аналитики */
+    if (req.method === "GET" && pathname === "/v1/admin/users") {
+      if (!isAdminDashboardAuthorized(req, url)) {
+        return sendJson(res, 401, { error: "Unauthorized", hint: "Bearer API_TOKEN or ?token=" });
+      }
+      const store = loadUserStore();
+      const users = Object.values(store.users)
+        .map((u) => ({
+          email: u.email,
+          fullName: u.fullName ?? null,
+          createdAt: u.createdAt ?? null
+        }))
+        .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+      return sendJson(res, 200, { ok: true, count: users.length, users });
+    }
+
     if (req.method === "POST" && pathname === "/v1/auth/register") {
       let body;
       try {
@@ -98,6 +131,15 @@ function isAuthorized(req) {
   const raw = req.headers.authorization || "";
   const token = raw.startsWith("Bearer ") ? raw.slice("Bearer ".length).trim() : "";
   return token && token === API_TOKEN;
+}
+
+/** Дашборд и /v1/admin/users: тот же секрет, что и для Huawei API — query ?token= или Bearer */
+function isAdminDashboardAuthorized(req, url) {
+  if (!API_TOKEN) return true;
+  const q = url.searchParams.get("token") || "";
+  const raw = req.headers.authorization || "";
+  const bearer = raw.startsWith("Bearer ") ? raw.slice("Bearer ".length).trim() : "";
+  return (q && q === API_TOKEN) || (bearer && bearer === API_TOKEN);
 }
 
 function sendJson(res, statusCode, body) {
@@ -209,6 +251,48 @@ function registerUser(body) {
       createdAt
     }
   };
+}
+
+function buildAdminDashboardHtml() {
+  const store = loadUserStore();
+  const list = Object.values(store.users).sort((a, b) =>
+    String(b.createdAt || "").localeCompare(String(a.createdAt || ""))
+  );
+  const rows = list
+    .map(
+      (u) =>
+        `<tr><td>${escapeHtml(u.email)}</td><td>${escapeHtml(u.fullName || "—")}</td><td>${escapeHtml(
+          String(u.createdAt || "")
+        )}</td></tr>`
+    )
+    .join("");
+  return `<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Smart Alarm — пользователи</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #0f1419; color: #e8eaed; }
+    h1 { font-size: 1.25rem; margin: 0 0 8px; }
+    p.note { color: #9aa0a6; font-size: 13px; margin: 0 0 20px; max-width: 640px; }
+    table { border-collapse: collapse; width: 100%; max-width: 720px; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #30363d; }
+    th { color: #8b949e; font-weight: 600; font-size: 12px; text-transform: uppercase; }
+    tr:hover td { background: rgba(255,255,255,.04); }
+    .count { color: #58a6ff; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Зарегистрированные пользователи</h1>
+  <p class="note">Пароли здесь не показываются. На бесплатном Render файлы могут обнуляться при деплое — для постоянной базы подключите PostgreSQL (Neon/Supabase) и миграцию позже.</p>
+  <p class="note">Всего: <span class="count">${list.length}</span></p>
+  <table>
+    <thead><tr><th>Email</th><th>Имя</th><th>Регистрация (UTC)</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="3">Пока никого</td></tr>'}</tbody>
+  </table>
+</body>
+</html>`;
 }
 
 function buildRegistrationLandingHtml() {
