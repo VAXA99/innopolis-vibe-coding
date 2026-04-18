@@ -1,0 +1,19 @@
+# Blueprint: корень репозитория → сервис в каталоге huawei-sync-server
+# В панели Render у веб-сервиса укажите Root Directory: huawei-sync-server (или пересоздайте сервис из этого blueprint).
+services:
+  - type: web
+    name: huawei-sync-server
+    runtime: node
+    rootDir: huawei-sync-server
+    plan: free
+    autoDeploy: true
+    buildCommand: "npm install --omit=dev"
+    startCommand: "npm start"
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: MOCK_MODE
+        value: "true"
+      - key: API_TOKEN
+        generateValue: true
