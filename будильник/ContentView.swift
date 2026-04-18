@@ -125,7 +125,9 @@ struct ContentView: View {
     @StateObject private var musicAlarmManager = AppleMusicAlarmManager()
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("app.userRegistered") private var isUserRegistered = false
+    @AppStorage("app.userPaid") private var isUserPaid = false
     @State private var showRegistrationLanding = false
+    @State private var showPaywall = false
 
     @State private var showSoundStep = false
     @State private var showSleepMode = false
@@ -141,8 +143,10 @@ struct ContentView: View {
                 onOpenStats: { showStats = true },
                 onSignOut: {
                     let d = UserDefaults.standard
+                    d.removeObject(forKey: "app.userID")
                     d.removeObject(forKey: "app.userEmail")
                     d.removeObject(forKey: "app.userFullName")
+                    d.removeObject(forKey: "app.userPaid")
                     isUserRegistered = false
                     showRegistrationLanding = true
                 }
@@ -188,6 +192,8 @@ struct ContentView: View {
                 sleepVM.syncSleepUIWhenViewAppears()
                 if !isUserRegistered {
                     showRegistrationLanding = true
+                } else {
+                    Task { await refreshPaidStateFromSupabase() }
                 }
             }
             .task(id: sleepVM.isRunning) {
@@ -197,7 +203,10 @@ struct ContentView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 sleepVM.syncSleepUIWhenViewAppears()
-                Task { await reconcileDeliveredWakeNotifications(sleepVM: sleepVM, alarmVM: alarmVM) }
+                Task {
+                    await reconcileDeliveredWakeNotifications(sleepVM: sleepVM, alarmVM: alarmVM)
+                    if isUserRegistered { await refreshPaidStateFromSupabase() }
+                }
             }
             .onChange(of: scenePhase) { _, phase in
                 sleepVM.handleScenePhaseChange(phase)
@@ -238,9 +247,16 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
                 alarmVM.handleSignificantTimeChange()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .paymentReturnFromWeb)) { note in
+                guard let url = note.object as? URL else { return }
+                Task { await handlePaymentReturnURL(url) }
+            }
             .fullScreenCover(isPresented: $showRegistrationLanding) {
                 AlarmRegistrationLandingView { payload in
                     let defaults = UserDefaults.standard
+                    let storedID = defaults.string(forKey: "app.userID").flatMap(UUID.init(uuidString:))
+                    let userID = storedID ?? UUID()
+                    defaults.set(userID.uuidString.lowercased(), forKey: "app.userID")
                     defaults.set(payload.email, forKey: "app.userEmail")
                     defaults.set(payload.fullName, forKey: "app.userFullName")
                     if !payload.endpointURL.isEmpty {
@@ -254,12 +270,113 @@ struct ContentView: View {
                             email: payload.email,
                             fullName: payload.fullName
                         )
+                        let profile = await SupabaseProfiles.loadOrCreateProfile(
+                            userID: userID,
+                            email: payload.email
+                        )
+                        if let profile {
+                            defaults.set(profile.paid, forKey: "app.userPaid")
+                        }
                     }
                     isUserRegistered = true
+                    isUserPaid = false
+                    showPaywall = true
                     showRegistrationLanding = false
                 }
                 .interactiveDismissDisabled(true)
             }
+            .fullScreenCover(isPresented: $showPaywall) {
+                PaywallView(
+                    onPayTap: {
+                        await openPaymentSuccessPage()
+                    },
+                    onRefresh: {
+                        await refreshPaidStateFromSupabase()
+                        if isUserPaid {
+                            showPaywall = false
+                        }
+                })
+                .interactiveDismissDisabled(true)
+                .task {
+                    await refreshPaidStateFromSupabase()
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func refreshPaidStateFromSupabase() async {
+        let d = UserDefaults.standard
+        guard isUserRegistered else {
+            showPaywall = false
+            return
+        }
+        guard let email = d.string(forKey: "app.userEmail")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else {
+            isUserPaid = false
+            showPaywall = true
+            return
+        }
+        let storedID = d.string(forKey: "app.userID").flatMap(UUID.init(uuidString:))
+        let userID = storedID ?? UUID()
+        if storedID == nil {
+            d.set(userID.uuidString.lowercased(), forKey: "app.userID")
+        }
+        if let profile = await SupabaseProfiles.loadOrCreateProfile(userID: userID, email: email) {
+            isUserPaid = profile.paid
+            showPaywall = !profile.paid
+        } else {
+            // Если сеть/база недоступны — остаёмся в безопасном состоянии с paywall.
+            isUserPaid = false
+            showPaywall = true
+        }
+    }
+
+    @MainActor
+    private func openPaymentSuccessPage() async {
+        var normalized = AppCloudConfig.resolvedServiceRootURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !normalized.lowercased().hasPrefix("http://"), !normalized.lowercased().hasPrefix("https://") {
+            normalized = "https://" + normalized
+        }
+        guard var comp = URLComponents(string: normalized) else { return }
+        comp.path = "/success"
+        comp.queryItems = [
+            URLQueryItem(name: "return_to", value: "smartalarm://payment-success?status=paid"),
+        ]
+        comp.fragment = nil
+        guard let url = comp.url else { return }
+        UIApplication.shared.open(url)
+    }
+
+    @MainActor
+    private func handlePaymentReturnURL(_ url: URL) async {
+        guard url.scheme?.lowercased() == "smartalarm" else { return }
+        let host = url.host?.lowercased() ?? ""
+        guard host == "payment-success" else { return }
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let status = comps?.queryItems?.first(where: { $0.name == "status" })?.value?.lowercased()
+        guard status == "paid" else { return }
+        await markCurrentUserAsPaidForMVP()
+        await refreshPaidStateFromSupabase()
+        if isUserPaid {
+            showPaywall = false
+        }
+    }
+
+    @MainActor
+    private func markCurrentUserAsPaidForMVP() async {
+        let d = UserDefaults.standard
+        guard let email = d.string(forKey: "app.userEmail")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return }
+        let storedID = d.string(forKey: "app.userID").flatMap(UUID.init(uuidString:))
+        let userID = storedID ?? UUID()
+        if storedID == nil {
+            d.set(userID.uuidString.lowercased(), forKey: "app.userID")
+        }
+        if let profile = await SupabaseProfiles.setPaidTrue(userID: userID, email: email) {
+            isUserPaid = profile.paid
+            showPaywall = !profile.paid
+            d.set(profile.paid, forKey: "app.userPaid")
         }
     }
 }
@@ -473,6 +590,69 @@ private struct AlarmRegistrationLandingView: View {
             }
         } catch {
             errorMessage = "Проблема с сетью: \(error.localizedDescription)"
+        }
+    }
+}
+
+private struct PaywallView: View {
+    let onPayTap: () async -> Void
+    let onRefresh: () async -> Void
+    @State private var isProcessing = false
+    @State private var isRefreshing = false
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                gradientBackground
+                VStack(spacing: 18) {
+                    GlassCard {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "moon.stars.fill")
+                                    .foregroundStyle(.indigo.opacity(0.95))
+                                Text("The Dream is Over")
+                                    .font(.title2.weight(.bold))
+                            }
+                            .foregroundStyle(.white)
+                            Text("Ночные привычки не прощают паузы.")
+                                .font(.headline)
+                                .foregroundStyle(.white)
+                            Text("Чтобы продолжить, откройте полный доступ")
+                                .font(.subheadline)
+                                .foregroundStyle(Color.white.opacity(0.78))
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("199 ₽ в месяц • персональные рекомендации • доступ без ограничений")
+                                .font(.caption)
+                                .foregroundStyle(Color.white.opacity(0.58))
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("Статус профиля: unpaid")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    PrimaryGradientButton(title: isProcessing ? "Проверяем оплату…" : "Оплатить 199 ₽", systemImage: "creditcard.fill") {
+                        guard !isProcessing else { return }
+                        isProcessing = true
+                        Task {
+                            await onPayTap()
+                            isProcessing = false
+                        }
+                    }
+                    .opacity(isProcessing ? 0.8 : 1)
+                    PrimaryGradientButton(title: isRefreshing ? "Обновляем…" : "Я уже оплатил — обновить статус", systemImage: "arrow.clockwise") {
+                        guard !isRefreshing else { return }
+                        isRefreshing = true
+                        Task {
+                            await onRefresh()
+                            isRefreshing = false
+                        }
+                    }
+                    .opacity(isRefreshing ? 0.8 : 1)
+                }
+                .padding(20)
+            }
+            .navigationTitle("Оплата")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 }

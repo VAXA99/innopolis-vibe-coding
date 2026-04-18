@@ -34,6 +34,12 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, service: "huawei-sync-server" });
     }
 
+    /** Страница успешной оплаты: предлагает вернуться в приложение по deep link. */
+    if (req.method === "GET" && pathname === "/success") {
+      const returnTo = String(url.searchParams.get("return_to") || "smartalarm://payment-success?status=paid");
+      return sendHtml(res, 200, buildPaymentSuccessHtml(returnTo));
+    }
+
     /** HTML-дашборд: список зарегистрированных пользователей. Защита: ?token=API_TOKEN или Authorization: Bearer */
     if (req.method === "GET" && pathname === "/admin") {
       if (!isAdminDashboardAuthorized(req, url)) {
@@ -427,6 +433,54 @@ function buildRegistrationLandingHtml() {
         result.textContent = "Сеть недоступна: " + String(err?.message || err);
       }
     });
+  </script>
+</body>
+</html>`;
+}
+
+function buildPaymentSuccessHtml(returnTo) {
+  const safeReturnTo = escapeHtml(String(returnTo || "smartalarm://payment-success?status=paid"));
+  const safeHref = safeReturnTo.startsWith("smartalarm://") ? safeReturnTo : "smartalarm://payment-success?status=paid";
+  return `<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Оплата прошла успешно</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      background: radial-gradient(1200px 700px at 20% 10%, #1b2440 0%, #0b1020 60%, #070a14 100%);
+      color: #f6f8ff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 20px;
+    }
+    .card {
+      width: min(92vw, 460px); padding: 24px; border-radius: 18px;
+      background: rgba(16,20,32,.9); border: 1px solid rgba(255,255,255,.08);
+      box-shadow: 0 10px 50px rgba(0,0,0,.45);
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    p { margin: 0; color: #c5cce2; line-height: 1.45; }
+    a.btn {
+      display: inline-block; margin-top: 18px; text-decoration: none;
+      background: linear-gradient(135deg, #7a5cff, #5aa8ff);
+      color: #fff; font-weight: 700; padding: 12px 16px; border-radius: 12px;
+    }
+    .note { margin-top: 10px; font-size: 12px; color: #95a0c4; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Оплата успешна</h1>
+    <p>Спасибо! Вернитесь в приложение, чтобы продолжить.</p>
+    <a class="btn" href="${safeHref}">Вернуться в приложение</a>
+    <p class="note">Если кнопка не сработала, используйте deep link: ${safeReturnTo}</p>
+  </div>
+  <script>
+    setTimeout(function () {
+      window.location.href = ${JSON.stringify(safeHref)};
+    }, 600);
   </script>
 </body>
 </html>`;

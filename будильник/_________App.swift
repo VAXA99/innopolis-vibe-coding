@@ -5,6 +5,9 @@ import UserNotifications
 import UIKit
 import MediaPlayer
 import AVFoundation
+#if canImport(Clarity)
+import Clarity
+#endif
 
 extension Notification.Name {
     static let smartAlarmDidFire = Notification.Name("smartAlarmDidFire")
@@ -17,6 +20,8 @@ extension Notification.Name {
     static let alarmRemoteStopRequested = Notification.Name("alarmRemoteStopRequested")
     /// Пользователь подтвердил пробуждение — снять отложенные «reminder» и флаг запланированного утра.
     static let userDismissedMorningAlarm = Notification.Name("userDismissedMorningAlarm")
+    /// Возврат из веб-страницы оплаты по deep link.
+    static let paymentReturnFromWeb = Notification.Name("paymentReturnFromWeb")
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -24,6 +29,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ application: UIApplication,
         didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+#if canImport(Clarity)
+        let clarityConfig = ClarityConfig(projectId: "wdjb5cy53s")
+        ClaritySDK.initialize(config: clarityConfig)
+#endif
         UNUserNotificationCenter.current().delegate = self
         // Lock screen / Control Center: treat sleep playback as remote-controllable media.
         application.beginReceivingRemoteControlEvents()
@@ -110,6 +119,9 @@ struct SmartAlarmApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onOpenURL { url in
+                    NotificationCenter.default.post(name: .paymentReturnFromWeb, object: url)
+                }
         }
     }
 }

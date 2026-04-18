@@ -8,6 +8,17 @@
 	<string>We need access to Apple Music to play the song you choose as your alarm.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Читаем шаги за сегодня и сон из «Здоровья», чтобы показать короткую сводку и совет к вечеру. Данные не отправляются с устройства.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.smartalarm.payment</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>smartalarm</string>
+			</array>
+		</dict>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

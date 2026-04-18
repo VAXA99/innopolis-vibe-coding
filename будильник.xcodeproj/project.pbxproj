@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		72AD33C22F937C99002499D0 /* Clarity in Frameworks */ = {isa = PBXBuildFile; productRef = 72AD33C12F937C99002499D0 /* Clarity */; };
 		72FF5A1B2F6B518D00C1D3F7 /* AlarmKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 72FF5A192F6B518D00C1D3F7 /* AlarmKit.framework */; };
 		72FF5A232F6B518D00C1D3F7 /* HealthKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 72FF5A222F6B518D00C1D3F7 /* HealthKit.framework */; };
 /* End PBXBuildFile section */
@@ -43,6 +44,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				72AD33C22F937C99002499D0 /* Clarity in Frameworks */,
 				72FF5A1B2F6B518D00C1D3F7 /* AlarmKit.framework in Frameworks */,
 				72FF5A232F6B518D00C1D3F7 /* HealthKit.framework in Frameworks */,
 			);
@@ -97,6 +99,7 @@
 			);
 			name = "будильник";
 			packageProductDependencies = (
+				72AD33C12F937C99002499D0 /* Clarity */,
 			);
 			productName = "будильник";
 			productReference = 72FF5A152F6B518D00C1D3F7 /* будильник.app */;
@@ -126,6 +129,9 @@
 			);
 			mainGroup = 72FF5A0C2F6B518D00C1D3F7;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				72AD33C02F937C99002499D0 /* XCRemoteSwiftPackageReference "clarity-apps" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 72FF5A162F6B518D00C1D3F7 /* Products */;
 			projectDirPath = "";
@@ -391,6 +397,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		72AD33C02F937C99002499D0 /* XCRemoteSwiftPackageReference "clarity-apps" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/microsoft/clarity-apps";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.5.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		72AD33C12F937C99002499D0 /* Clarity */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 72AD33C02F937C99002499D0 /* XCRemoteSwiftPackageReference "clarity-apps" */;
+			productName = Clarity;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 72FF5A0D2F6B518D00C1D3F7 /* Project object */;
 }
