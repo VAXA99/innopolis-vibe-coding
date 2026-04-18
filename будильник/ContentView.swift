@@ -345,7 +345,7 @@ struct ContentView: View {
         ]
         comp.fragment = nil
         guard let url = comp.url else { return }
-        UIApplication.shared.open(url)
+        _ = await UIApplication.shared.open(url)
     }
 
     @MainActor
