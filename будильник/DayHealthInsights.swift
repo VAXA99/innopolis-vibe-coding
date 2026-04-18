@@ -334,6 +334,19 @@ final class DayHealthInsightsStore: ObservableObject {
         loadHuaweiHistory()
     }
 
+    /// После «Выйти из аккаунта»: убираем endpoint/token и связанное с облаком, чтобы не тянуть данные прежнего пользователя.
+    func clearAccountLinkedCloudDefaults() {
+        let d = UserDefaults.standard
+        d.removeObject(forKey: Self.huaweiAutoEndpointKey)
+        d.removeObject(forKey: Self.huaweiAutoTokenKey)
+        d.removeObject(forKey: Self.huaweiAutoLastSyncKey)
+        d.removeObject(forKey: Self.renderDeviceIdKey)
+        huaweiAutoEndpointURL = ""
+        huaweiAutoAccessToken = ""
+        lastHuaweiAutoSyncAt = nil
+        huaweiPayloadIsDemo = false
+    }
+
     /// Records to push to backend: full Huawei history, or one row from Apple Health summary for the analytics day.
     func healthRecordsForBackendUpload() -> [DayHealthDailyRecord] {
         switch dataSourceMode {

@@ -138,7 +138,14 @@ struct ContentView: View {
                 alarmVM: alarmVM,
                 musicAlarmManager: musicAlarmManager,
                 onNext: { showSoundStep = true },
-                onOpenStats: { showStats = true }
+                onOpenStats: { showStats = true },
+                onSignOut: {
+                    let d = UserDefaults.standard
+                    d.removeObject(forKey: "app.userEmail")
+                    d.removeObject(forKey: "app.userFullName")
+                    isUserRegistered = false
+                    showRegistrationLanding = true
+                }
             )
             .navigationDestination(isPresented: $showSoundStep) {
                 SoundSetupStepView(sleepVM: sleepVM, alarmVM: alarmVM, isEditingActiveSleepSession: false) {
@@ -179,7 +186,9 @@ struct ContentView: View {
             }
             .onAppear {
                 sleepVM.syncSleepUIWhenViewAppears()
-                showRegistrationLanding = !isUserRegistered
+                if !isUserRegistered {
+                    showRegistrationLanding = true
+                }
             }
             .task(id: sleepVM.isRunning) {
                 guard sleepVM.isRunning else { return }
@@ -473,6 +482,7 @@ private struct AlarmSetupStepView: View {
     @ObservedObject var musicAlarmManager: AppleMusicAlarmManager
     let onNext: () -> Void
     let onOpenStats: () -> Void
+    let onSignOut: () -> Void
     @StateObject private var healthInsights = DayHealthInsightsStore()
     @Environment(\.scenePhase) private var scenePhase
     @State private var showMelodySettings = false
@@ -739,7 +749,7 @@ private struct AlarmSetupStepView: View {
                 .preferredColorScheme(.dark)
         }
         .sheet(isPresented: $showAppSettings) {
-            AlarmAppSettingsSheet(healthInsights: healthInsights)
+            AlarmAppSettingsSheet(healthInsights: healthInsights, onSignOut: onSignOut)
                 .preferredColorScheme(.dark)
         }
         .task {
@@ -776,6 +786,7 @@ private struct AlarmSetupStepView: View {
 private struct AlarmAppSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var healthInsights: DayHealthInsightsStore
+    let onSignOut: () -> Void
     @State private var snoozeEnabled = AlarmBehaviorSettings.isSnoozeEnabled
     @State private var snoozeMinutes = AlarmBehaviorSettings.snoozeIntervalMinutes
     @State private var snoozeMax = AlarmBehaviorSettings.snoozeMaxCount
@@ -956,6 +967,21 @@ private struct AlarmAppSettingsSheet: View {
                     .foregroundStyle(.tertiary)
             } header: {
                 Text("О приложении")
+            }
+
+            Section {
+                Button(role: .destructive) {
+                    persist()
+                    healthInsights.clearAccountLinkedCloudDefaults()
+                    onSignOut()
+                    dismiss()
+                } label: {
+                    Text("Выйти из аккаунта")
+                        .frame(maxWidth: .infinity)
+                }
+            } footer: {
+                Text("Имя, email и доступ к облаку будут сброшены; откроется экран регистрации.")
+                    .font(.caption)
             }
         }
     }

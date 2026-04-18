@@ -15,8 +15,8 @@
 	<key>REGISTRATION_API_BASE_URL</key>
 	<string>https://innopolis-vibe-coding.onrender.com</string>
 	<key>SUPABASE_URL</key>
-	<string></string>
+	<string>https://vdlnnazuxmvatnhsglut.supabase.co</string>
 	<key>SUPABASE_ANON_KEY</key>
-	<string></string>
+	<string>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZkbG5uYXp1eG12YXRuaHNnbHV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4NjU3NzgsImV4cCI6MjA5MTQ0MTc3OH0.2ssbr2K0JLGWljeiEf5CluwzrbV5-8VszvpwwvWAR2U</string>
 </dict>
 </plist>
