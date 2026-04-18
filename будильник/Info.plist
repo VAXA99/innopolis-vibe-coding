@@ -12,5 +12,7 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>REGISTRATION_API_BASE_URL</key>
+	<string>https://innopolis-vibe-coding.onrender.com</string>
 </dict>
 </plist>

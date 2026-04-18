@@ -5,11 +5,127 @@ import UniformTypeIdentifiers
 import UIKit
 import UserNotifications
 
+/// Крупные числа: шаги, активные ккал, сон — на главном экране и в Health services.
+private struct HealthMetricTilesBlock: View {
+    let summary: DayHealthSummary?
+    var isStaleCached: Bool = false
+    /// Сервер отдал демо/заглушку — цифры не из Huawei Health на телефоне.
+    var isDemoSample: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Шаги · калории · сон")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.75))
+                if isStaleCached {
+                    Text("кэш")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.orange.opacity(0.22)))
+                }
+                if isDemoSample {
+                    Text("демо")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.yellow)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.yellow.opacity(0.18)))
+                }
+            }
+            if isDemoSample {
+                Text("Эти числа приходят с вашего backend в демо-режиме (MOCK), а не из приложения Huawei Health. Чтобы совпадали с часами/телефоном, на Render выключите MOCK_MODE и подключите реальный источник данных Huawei.")
+                    .font(.caption2)
+                    .foregroundStyle(Color.yellow.opacity(0.92))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(alignment: .top, spacing: 8) {
+                metricTile(
+                    title: "Шаги",
+                    value: stepsText,
+                    footnote: "за день",
+                    icon: "figure.walk",
+                    accent: .cyan
+                )
+                metricTile(
+                    title: "Ккал",
+                    value: kcalText,
+                    footnote: "активные",
+                    icon: "flame.fill",
+                    accent: .orange
+                )
+                metricTile(
+                    title: "Сон",
+                    value: sleepText,
+                    footnote: "прошлая ночь",
+                    icon: "moon.zzz.fill",
+                    accent: .indigo
+                )
+            }
+        }
+    }
+
+    private var stepsText: String {
+        guard let s = summary?.stepsToday else { return "—" }
+        return s.formatted(.number.grouping(.automatic))
+    }
+
+    private var kcalText: String {
+        guard let k = summary?.activeEnergyKcal else { return "—" }
+        if k < 1 { return "—" }
+        return "\(Int(k.rounded()))"
+    }
+
+    private var sleepText: String {
+        guard let h = summary?.sleepLastNightHours else { return "—" }
+        let t = (h * 10).rounded() / 10
+        if t == floor(t) {
+            return "\(Int(t)) ч"
+        }
+        return String(format: "%.1f ч", t)
+    }
+
+    private func metricTile(title: String, value: String, footnote: String, icon: String, accent: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(accent.opacity(0.95))
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.65))
+            }
+            Text(value)
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.white)
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
+            Text(footnote)
+                .font(.caption2)
+                .foregroundStyle(Color.white.opacity(0.45))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.1))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+    }
+}
+
 struct ContentView: View {
     @StateObject private var alarmVM = AlarmViewModel()
     @StateObject private var sleepVM = SleepViewModel()
     @StateObject private var musicAlarmManager = AppleMusicAlarmManager()
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("app.userRegistered") private var isUserRegistered = false
+    @State private var showRegistrationLanding = false
 
     @State private var showSoundStep = false
     @State private var showSleepMode = false
@@ -63,6 +179,7 @@ struct ContentView: View {
             }
             .onAppear {
                 sleepVM.syncSleepUIWhenViewAppears()
+                showRegistrationLanding = !isUserRegistered
             }
             .task(id: sleepVM.isRunning) {
                 guard sleepVM.isRunning else { return }
@@ -112,6 +229,235 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
                 alarmVM.handleSignificantTimeChange()
             }
+            .fullScreenCover(isPresented: $showRegistrationLanding) {
+                AlarmRegistrationLandingView { payload in
+                    let defaults = UserDefaults.standard
+                    defaults.set(payload.email, forKey: "app.userEmail")
+                    defaults.set(payload.fullName, forKey: "app.userFullName")
+                    if !payload.endpointURL.isEmpty {
+                        defaults.set(payload.endpointURL, forKey: "dayHealth.huaweiAuto.endpoint")
+                    }
+                    if !payload.accessToken.isEmpty {
+                        defaults.set(payload.accessToken, forKey: "dayHealth.huaweiAuto.token")
+                    }
+                    isUserRegistered = true
+                    showRegistrationLanding = false
+                }
+                .interactiveDismissDisabled(true)
+            }
+        }
+    }
+}
+
+private struct AlarmRegistrationPayload {
+    let fullName: String
+    let email: String
+    let endpointURL: String
+    let accessToken: String
+}
+
+private struct AlarmRegistrationLandingView: View {
+    let onRegistered: (AlarmRegistrationPayload) -> Void
+
+    @State private var fullName = ""
+    @State private var email = ""
+    @State private var password = ""
+    @State private var isSubmitting = false
+    @State private var errorMessage = ""
+
+    /// Адрес сервера только из кода / Info.plist — пользователь ничего не вставляет.
+    private var serverRoot: String { AppCloudConfig.resolvedServiceRootURL }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                gradientBackground
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ZStack {
+                                Circle()
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [Color.indigo.opacity(0.55), Color.purple.opacity(0.35)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .frame(width: 56, height: 56)
+                                Image(systemName: "alarm.fill")
+                                    .font(.title2.weight(.semibold))
+                                    .foregroundStyle(.white)
+                            }
+                            Text("Smart Alarm")
+                                .font(.largeTitle.weight(.bold))
+                                .foregroundStyle(.white)
+                            Text("Создайте аккаунт — имя, почта и пароль. Данные сохраняются на нашем сервере автоматически.")
+                                .font(.subheadline)
+                                .foregroundStyle(Color.white.opacity(0.72))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.top, 8)
+
+                        GlassCard {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("Регистрация")
+                                    .font(.headline)
+                                TextField("Имя", text: $fullName)
+                                    .textFieldStyle(.plain)
+                                    .padding(12)
+                                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
+                                    .foregroundStyle(.white)
+                                    .textInputAutocapitalization(.words)
+
+                                TextField("Email", text: $email)
+                                    .textFieldStyle(.plain)
+                                    .padding(12)
+                                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
+                                    .foregroundStyle(.white)
+                                    .keyboardType(.emailAddress)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+
+                                SecureField("Пароль (не меньше 6 символов)", text: $password)
+                                    .textFieldStyle(.plain)
+                                    .padding(12)
+                                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
+                                    .foregroundStyle(.white)
+                            }
+                        }
+
+                        if serverRoot.isEmpty {
+                            Text("Регистрация сейчас недоступна. Установите обновление приложения или обратитесь в поддержку.")
+                                .font(.caption)
+                                .foregroundStyle(Color.orange.opacity(0.9))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        if !errorMessage.isEmpty {
+                            Text(errorMessage)
+                                .font(.footnote)
+                                .foregroundStyle(Color.orange.opacity(0.95))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        PrimaryGradientButton(title: isSubmitting ? "Отправка…" : "Создать аккаунт", systemImage: "person.badge.plus") {
+                            Task { await submit() }
+                        }
+                        .disabled(isSubmitting || !canSubmit)
+                        .opacity(canSubmit && !isSubmitting ? 1 : 0.55)
+
+                        Text("Регистрируясь, вы соглашаетесь на обработку имени и email для работы аккаунта.")
+                            .font(.caption2)
+                            .foregroundStyle(Color.white.opacity(0.45))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 32)
+                }
+            }
+            .navigationTitle("Добро пожаловать")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private var canSubmit: Bool {
+        isValidEmail(email.trimmingCharacters(in: .whitespacesAndNewlines))
+            && password.count >= 6
+            && !serverRoot.isEmpty
+    }
+
+    private func isValidEmail(_ s: String) -> Bool {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains("@"), let at = trimmed.firstIndex(of: "@") else { return false }
+        let domain = trimmed[trimmed.index(after: at)...]
+        return domain.contains(".") && trimmed.count >= 5
+    }
+
+    /// Как в `DayHealthInsightsStore`: домен → `https://…/v1/huawei/summary` для дальнейшего health-синка.
+    private func normalizedHuaweiEndpointString(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        var s = trimmed
+        if !s.lowercased().hasPrefix("http://"), !s.lowercased().hasPrefix("https://") {
+            s = "https://" + s
+        }
+        guard var comp = URLComponents(string: s) else { return trimmed }
+        let path = comp.path
+        if path.isEmpty || path == "/" {
+            comp.path = "/v1/huawei/summary"
+        }
+        return comp.url?.absoluteString ?? trimmed
+    }
+
+    private func registerURL(from endpointRoot: String) -> URL? {
+        var normalized = endpointRoot.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !normalized.lowercased().hasPrefix("http://"), !normalized.lowercased().hasPrefix("https://") {
+            normalized = "https://" + normalized
+        }
+        guard var comp = URLComponents(string: normalized) else { return nil }
+        comp.path = "/v1/auth/register"
+        comp.query = nil
+        comp.fragment = nil
+        return comp.url
+    }
+
+    private func submit() async {
+        errorMessage = ""
+        let root = serverRoot
+        guard !root.isEmpty else {
+            errorMessage = "Приложение не настроено: нет адреса сервера в сборке."
+            return
+        }
+        guard let url = registerURL(from: root) else {
+            errorMessage = "Некорректный адрес сервера в настройках сборки."
+            return
+        }
+        isSubmitting = true
+        defer { isSubmitting = false }
+
+        let body: [String: String] = [
+            "fullName": fullName.trimmingCharacters(in: .whitespacesAndNewlines),
+            "email": email.trimmingCharacters(in: .whitespacesAndNewlines),
+            "password": password,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+            errorMessage = "Не удалось сформировать запрос."
+            return
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        req.timeoutInterval = 45
+
+        do {
+            let (responseData, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                errorMessage = "Нет ответа от сервера. Проверьте интернет."
+                return
+            }
+            if (200 ... 299).contains(http.statusCode) {
+                let normalizedEndpoint = normalizedHuaweiEndpointString(root)
+                onRegistered(
+                    AlarmRegistrationPayload(
+                        fullName: fullName.trimmingCharacters(in: .whitespacesAndNewlines),
+                        email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+                        endpointURL: normalizedEndpoint,
+                        accessToken: ""
+                    )
+                )
+                return
+            }
+            let hint = String(data: responseData, encoding: .utf8) ?? ""
+            errorMessage = "Не удалось зарегистрироваться. Попробуйте ещё раз. (\(http.statusCode))"
+            if !hint.isEmpty {
+                errorMessage += " \(String(hint.prefix(120)))"
+            }
+        } catch {
+            errorMessage = "Проблема с сетью: \(error.localizedDescription)"
         }
     }
 }
@@ -121,6 +467,8 @@ private struct AlarmSetupStepView: View {
     @ObservedObject var musicAlarmManager: AppleMusicAlarmManager
     let onNext: () -> Void
     let onOpenStats: () -> Void
+    @StateObject private var healthInsights = DayHealthInsightsStore()
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showMelodySettings = false
     @State private var showAppSettings = false
     @State private var showRepeatDetails = false
@@ -131,9 +479,6 @@ private struct AlarmSetupStepView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
-                        Text("Step 1")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Color.white.opacity(0.8))
                         Spacer()
                         Button {
                             showAppSettings = true
@@ -186,6 +531,49 @@ private struct AlarmSetupStepView: View {
                                 Image(systemName: "bed.double.fill")
                                     .font(.title3.weight(.semibold))
                                     .foregroundStyle(alarmVM.sleepDurationColor)
+                            }
+                        }
+                    }
+
+                    GlassCard {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Smart Sleep Insights")
+                                .font(.headline)
+                            if let last = healthInsights.lastHuaweiAutoSyncAt {
+                                Text("Updated \(relativeSyncText(from: last))")
+                                    .font(.caption2)
+                                    .foregroundStyle(Color.white.opacity(0.6))
+                            }
+                            Text("Sleep-day: \(healthInsights.effectiveAnalyticsDate.formatted(date: .abbreviated, time: .omitted))")
+                                .font(.caption2)
+                                .foregroundStyle(Color.white.opacity(0.6))
+                            if healthInsights.dataSourceMode == .huaweiAuto && healthInsights.isHuaweiAutoDataStale {
+                                Text("Data may be stale until connection is restored.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                            }
+                            if let summary = healthInsights.summary {
+                                HealthMetricTilesBlock(
+                                    summary: summary,
+                                    isStaleCached: healthInsights.dataSourceMode == .huaweiAuto && healthInsights.isHuaweiAutoDataStale,
+                                    isDemoSample: healthInsights.dataSourceMode == .huaweiAuto && healthInsights.huaweiPayloadIsDemo
+                                )
+                                .padding(.top, 4)
+                                Text(DayHealthTipBuilder.tips(from: summary))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if let top = DayHealthTipBuilder.insights(summary: summary, history: healthInsights.huaweiManualHistory).first {
+                                    Text("• \(top)")
+                                        .font(.caption2)
+                                        .foregroundStyle(Color.white.opacity(0.8))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            } else {
+                                Text("Подключите Apple Health или Huawei Auto в настройках, чтобы получать персональные рекомендации к вечеру и прогноз бодрости утром.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                     }
@@ -345,19 +733,43 @@ private struct AlarmSetupStepView: View {
                 .preferredColorScheme(.dark)
         }
         .sheet(isPresented: $showAppSettings) {
-            AlarmAppSettingsSheet()
+            AlarmAppSettingsSheet(healthInsights: healthInsights)
                 .preferredColorScheme(.dark)
+        }
+        .task {
+            await healthInsights.refreshAuthorizationState()
+            await healthInsights.reloadSummary()
+        }
+        .task {
+            // Автообновление сводки на первом экране (каждые 5 минут).
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 300_000_000_000)
+                await healthInsights.reloadSummary()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task {
+                await healthInsights.refreshAuthorizationState()
+                await healthInsights.reloadSummary()
+            }
         }
         .onDisappear {
             AlarmSoundPreview.stop()
             musicAlarmManager.stopPreview()
         }
     }
+
+    private func relativeSyncText(from date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f.localizedString(for: date, relativeTo: Date())
+    }
 }
 
 private struct AlarmAppSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var healthInsights = DayHealthInsightsStore()
+    @ObservedObject var healthInsights: DayHealthInsightsStore
     @State private var snoozeEnabled = AlarmBehaviorSettings.isSnoozeEnabled
     @State private var snoozeMinutes = AlarmBehaviorSettings.snoozeIntervalMinutes
     @State private var snoozeMax = AlarmBehaviorSettings.snoozeMaxCount
@@ -375,122 +787,7 @@ private struct AlarmAppSettingsSheet: View {
         NavigationStack {
             ZStack {
                 gradientBackground
-                Form {
-                    Section {
-                        Text(
-                            "Короткий сигнал на заблокированном экране — ограничение iOS. Полный звук будильника в приложении идёт по кругу, пока вы его не выключите."
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    } header: {
-                        Text("Звук и уведомления")
-                    }
-
-                    Section {
-                        Text("На шаге 1: время, дни недели, мелодия. Здесь: snooze, нарастание громкости в приложении, вибрация.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } header: {
-                        Text("Что обычно бывает в будильниках")
-                    }
-
-                    Section {
-                        Toggle("Snooze", isOn: $snoozeEnabled)
-                        Picker("Интервал snooze", selection: $snoozeMinutes) {
-                            Text("5 мин").tag(5)
-                            Text("9 мин").tag(9)
-                            Text("10 мин").tag(10)
-                            Text("15 мин").tag(15)
-                            Text("20 мин").tag(20)
-                        }
-                        .disabled(!snoozeEnabled)
-                        Stepper(value: $snoozeMax, in: 0 ... 20) {
-                            Text(snoozeMax == 0 ? "Лимит snooze: без лимита" : "Лимит snooze: \(snoozeMax)× за серию")
-                        }
-                        .disabled(!snoozeEnabled)
-                        Toggle("Плавное нарастание громкости", isOn: $crescendoOn)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Длительность нарастания: \(Int(crescendoSec)) с")
-                                .font(.subheadline)
-                            Slider(value: $crescendoSec, in: 10 ... 120, step: 5)
-                        }
-                        .disabled(!crescendoOn)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Громкость в приложении: \(Int(alarmVolume * 100))%")
-                                .font(.subheadline)
-                            Slider(value: $alarmVolume, in: 0.2 ... 1.0, step: 0.05)
-                        }
-                    } header: {
-                        Text("Будильник")
-                    } footer: {
-                        Text("Плавное нарастание и слайдер громкости: встроенные рингтоны, файл из «Файлы», запасной рингтон. Трек из медиатеки / Apple Music — громкость как у обычного плеера (iOS не даёт плавный подъём программно).")
-                            .font(.caption2)
-                    }
-
-                    Section {
-                        Toggle("Вибрация у будильника", isOn: $vibrationOn)
-                        Picker("Как вибрировать", selection: $vibMode) {
-                            ForEach(AlarmVibrationSettings.Mode.allCases) { m in
-                                Text(m.title).tag(m)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        if vibMode == .standard {
-                            Picker("Тип", selection: $style) {
-                                ForEach(AlarmVibrationSettings.Style.allCases) { s in
-                                    Text(s.title).tag(s)
-                                }
-                            }
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Интервал между импульсами: \(String(format: "%.1f", interval)) с")
-                                    .font(.subheadline)
-                                Slider(value: $interval, in: 0.8 ... 6.0, step: 0.1)
-                            }
-                            Button("Тест — один импульс") {
-                                persist()
-                                AlarmVibrationSettings.playStandardSamplePulse()
-                            }
-                            .disabled(!vibrationOn)
-                        } else {
-                            Text("Ниже — площадка: «Начать запись» → рисуете → «Стоп» — сразу слышите результат. «Готово» вверху сохраняет рисунок в будильник.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            AlarmVibrationCustomPatternPad(samples: $customDraftSamples)
-                                .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
-                                .listRowBackground(Color.clear)
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Тишина между повторами рисунка: \(String(format: "%.1f", patternGap)) с")
-                                    .font(.subheadline)
-                                Slider(value: $patternGap, in: 0.5 ... 7.0, step: 0.1)
-                            }
-                        }
-                    } header: {
-                        Text("Вибрация")
-                    } footer: {
-                        Text("Пока будильник звенит, рисунок проигрывается по кругу. «Тишина между повторами» — сколько секунд тишины после одного полного прохода рисунка до следующего. Свой рисунок — это Taptic в приложении, не отдельный файл вибрации iOS.")
-                            .font(.caption2)
-                    }
-
-                    Section {
-                        AlarmHealthDaySettingsBlock(store: healthInsights)
-                    } header: {
-                        Text("Сон и день")
-                    } footer: {
-                        Text("С Personal Team (бесплатный Apple ID) Apple не выдаёт профиль с HealthKit — раздел «Здоровье» в настройках будет недоступен до участия в Apple Developer Program. Сводка не уходит с устройства.")
-                            .font(.caption2)
-                    }
-
-                    Section {
-                        Text("Smart Alarm · режим сна и микс")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    } header: {
-                        Text("О приложении")
-                    }
-                }
+                settingsForm
                 .scrollContentBackground(.hidden)
             }
             .navigationTitle("Настройки")
@@ -534,6 +831,129 @@ private struct AlarmAppSettingsSheet: View {
         }
     }
 
+    private var settingsForm: some View {
+        Form {
+            Section {
+                Text(
+                    "Короткий сигнал на заблокированном экране — ограничение iOS. Полный звук будильника в приложении идёт по кругу, пока вы его не выключите."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } header: {
+                Text("Звук и уведомления")
+            }
+
+            Section {
+                Text("На шаге 1: время, дни недели, мелодия. Здесь: snooze, нарастание громкости в приложении, вибрация.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Что обычно бывает в будильниках")
+            }
+
+            Section {
+                NavigationLink {
+                    Form {
+                        Toggle("Snooze", isOn: $snoozeEnabled)
+                        Picker("Интервал snooze", selection: $snoozeMinutes) {
+                            Text("5 мин").tag(5)
+                            Text("9 мин").tag(9)
+                            Text("10 мин").tag(10)
+                            Text("15 мин").tag(15)
+                            Text("20 мин").tag(20)
+                        }
+                        .disabled(!snoozeEnabled)
+                        Stepper(value: $snoozeMax, in: 0 ... 20) {
+                            Text(snoozeMax == 0 ? "Лимит snooze: без лимита" : "Лимит snooze: \(snoozeMax)× за серию")
+                        }
+                        .disabled(!snoozeEnabled)
+                        Toggle("Плавное нарастание громкости", isOn: $crescendoOn)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Длительность нарастания: \(Int(crescendoSec)) с")
+                                .font(.subheadline)
+                            Slider(value: $crescendoSec, in: 10 ... 120, step: 5)
+                        }
+                        .disabled(!crescendoOn)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Громкость в приложении: \(Int(alarmVolume * 100))%")
+                                .font(.subheadline)
+                            Slider(value: $alarmVolume, in: 0.2 ... 1.0, step: 0.05)
+                        }
+                    }
+                    .navigationTitle("Alarm settings")
+                } label: {
+                    Label("Alarm settings", systemImage: "alarm.fill")
+                }
+            }
+
+            Section {
+                NavigationLink {
+                    Form {
+                        Toggle("Вибрация у будильника", isOn: $vibrationOn)
+                        Picker("Как вибрировать", selection: $vibMode) {
+                            ForEach(AlarmVibrationSettings.Mode.allCases) { m in
+                                Text(m.title).tag(m)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        if vibMode == .standard {
+                            Picker("Тип", selection: $style) {
+                                ForEach(AlarmVibrationSettings.Style.allCases) { s in
+                                    Text(s.title).tag(s)
+                                }
+                            }
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Интервал между импульсами: \(String(format: "%.1f", interval)) с")
+                                    .font(.subheadline)
+                                Slider(value: $interval, in: 0.8 ... 6.0, step: 0.1)
+                            }
+                            Button("Тест — один импульс") {
+                                persist()
+                                AlarmVibrationSettings.playStandardSamplePulse()
+                            }
+                            .disabled(!vibrationOn)
+                        } else {
+                            Picker("Сила вибрации", selection: $style) {
+                                ForEach(AlarmVibrationSettings.Style.allCases) { s in
+                                    Text(s.title).tag(s)
+                                }
+                            }
+                            AlarmVibrationCustomPatternPad(samples: $customDraftSamples)
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Тишина между повторами рисунка: \(String(format: "%.1f", patternGap)) с")
+                                    .font(.subheadline)
+                                Slider(value: $patternGap, in: 0.5 ... 7.0, step: 0.1)
+                            }
+                        }
+                    }
+                    .navigationTitle("Vibration settings")
+                } label: {
+                    Label("Vibration settings", systemImage: "iphone.radiowaves.left.and.right")
+                }
+            }
+
+            RenderBackendSection(store: healthInsights)
+
+            Section {
+                NavigationLink {
+                    AlarmHealthDaySettingsBlock(store: healthInsights)
+                        .navigationTitle("Health services")
+                } label: {
+                    Label("Health services", systemImage: "heart.text.square.fill")
+                }
+            }
+
+            Section {
+                Text("Smart Alarm · режим сна и микс")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } header: {
+                Text("О приложении")
+            }
+        }
+    }
+
     private func persist() {
         AlarmBehaviorSettings.isSnoozeEnabled = snoozeEnabled
         AlarmBehaviorSettings.snoozeIntervalMinutes = snoozeMinutes
@@ -557,13 +977,89 @@ private struct AlarmAppSettingsSheet: View {
     }
 }
 
+private struct RenderBackendSection: View {
+    @ObservedObject var store: DayHealthInsightsStore
+
+    var body: some View {
+        Section {
+            if store.isHuaweiAutoConfigured {
+                Button {
+                    Task { await store.syncToRenderBackend() }
+                } label: {
+                    HStack {
+                        if store.renderUploadInProgress {
+                            ProgressView()
+                                .padding(.trailing, 6)
+                        }
+                        Text("Выгрузить на Render-сервер")
+                    }
+                }
+                .disabled(store.renderUploadInProgress)
+                if let msg = store.lastRenderUploadMessage, !msg.isEmpty {
+                    Text(msg)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let t = store.lastRenderUploadAt {
+                    Text("Последняя выгрузка: \(t.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            } else {
+                Text(
+                    "Укажите URL вида https://…/v1/huawei/summary и токен в Health services — это ваш сервис на Render; выгрузка пойдёт на тот же хост (путь /v1/health/daily-upload)."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        } header: {
+            Text("Backend (Render)")
+        } footer: {
+            Text(
+                "Без Supabase и без Apple: только ваш API_TOKEN. Данные пишутся в файл на сервере (на бесплатном Render он может сбрасываться при деплое — для постоянства подключите Postgres на Render)."
+            )
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+        }
+    }
+}
+
 private struct AlarmHealthDaySettingsBlock: View {
     @ObservedObject var store: DayHealthInsightsStore
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var huaweiAutoEndpoint: String = ""
+    @State private var huaweiAutoToken: String = ""
+    @State private var showHuaweiConnectSheet = false
+    @State private var showConnectedDevicesSheet = false
+    @State private var showAdvancedBridge = false
 
     var body: some View {
         #if os(iOS)
         Group {
-            if !store.isHealthDataAvailable {
+            HStack(spacing: 10) {
+                serviceBadge(
+                    title: "Apple Health",
+                    isSelected: store.dataSourceMode == .appleHealth,
+                    icon: "heart.fill"
+                ) {
+                    store.dataSourceMode = .appleHealth
+                }
+                serviceBadge(
+                    title: "Huawei",
+                    isSelected: store.dataSourceMode != .appleHealth,
+                    icon: "waveform.path.ecg"
+                ) {
+                    store.dataSourceMode = .huaweiAuto
+                }
+            }
+            .padding(.vertical, 4)
+
+            if store.dataSourceMode == .huaweiManual {
+                huaweiAutoContent
+            } else if store.dataSourceMode == .huaweiAuto {
+                huaweiAutoContent
+            } else if !store.isHealthDataAvailable {
                 Text("«Здоровье» на этом устройстве недоступно.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -601,9 +1097,116 @@ private struct AlarmHealthDaySettingsBlock: View {
                 }
             }
             if let err = store.lastErrorMessage, !err.isEmpty {
-                Text(err)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
+                EmptyView()
+            }
+        }
+        .onAppear {
+            if store.dataSourceMode == .huaweiManual {
+                // Миграция со старого ручного режима: теперь оставляем только авто-синхронизацию Huawei.
+                store.dataSourceMode = .huaweiAuto
+            }
+            huaweiAutoEndpoint = store.huaweiAutoEndpointURL
+            huaweiAutoToken = store.huaweiAutoAccessToken
+        }
+        .task {
+            guard store.dataSourceMode == .huaweiAuto, store.huaweiAutoSyncEnabled else { return }
+            await store.syncHuaweiAutoNow()
+        }
+        .task {
+            guard store.dataSourceMode == .huaweiAuto else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 900_000_000_000) // 15 min
+                guard store.huaweiAutoSyncEnabled else { continue }
+                await store.syncHuaweiAutoNow()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, store.dataSourceMode == .huaweiAuto, store.huaweiAutoSyncEnabled else { return }
+            Task { await store.syncHuaweiAutoNow() }
+        }
+        .fullScreenCover(isPresented: $showHuaweiConnectSheet) {
+            NavigationStack {
+                Form {
+                    Section("Choose source") {
+                        ForEach(DayHealthInsightsStore.HuaweiSourceKind.allCases) { kind in
+                            Button {
+                                store.huaweiSourceKind = kind
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(kind.title)
+                                        Text(kind.subtitle)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if store.huaweiSourceKind == kind {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    Section("Huawei account") {
+                        Text("Подключите backend-bridge один раз. Дальше шаги, калории и сон подтягиваются автоматически.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Если на сервере MOCK_MODE=true, приложение покажет демо-цифры — они не совпадут с Huawei Health на телефоне, пока не будет живого API.")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                        TextField("Backend URL (https://.../v1/huawei/summary)", text: $huaweiAutoEndpoint)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        SecureField("App token", text: $huaweiAutoToken)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        Button("Connect Huawei") {
+                            Task {
+                                await store.connectHuaweiAuto(endpointURL: huaweiAutoEndpoint, accessToken: huaweiAutoToken)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.indigo)
+                    }
+
+                    Section("Advanced") {
+                        Toggle("Show advanced bridge details", isOn: $showAdvancedBridge)
+                        Toggle("Automatic background sync", isOn: $store.huaweiAutoSyncEnabled)
+                        Picker("Day boundary", selection: $store.analyticsDayCutoffHour) {
+                            Text("00:00").tag(0)
+                            Text("01:00").tag(1)
+                            Text("02:00").tag(2)
+                            Text("03:00").tag(3)
+                            Text("04:00").tag(4)
+                            Text("05:00").tag(5)
+                            Text("06:00").tag(6)
+                        }
+                        .pickerStyle(.menu)
+                        Text("After midnight, metrics are still counted as previous day until this hour.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        if showAdvancedBridge {
+                            LabeledContent("Source host", value: store.huaweiAutoHostLabel)
+                            if let last = store.lastHuaweiAutoSyncAt {
+                                LabeledContent("Last sync", value: last.formatted(date: .abbreviated, time: .shortened))
+                            }
+                        }
+                    }
+                }
+                .navigationTitle("Connect Huawei")
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Close") { showHuaweiConnectSheet = false }
+                    }
+                }
+            }
+        }
+        .fullScreenCover(isPresented: $showConnectedDevicesSheet) {
+            NavigationStack {
+                connectedDevicesContent
             }
         }
         #else
@@ -626,24 +1229,7 @@ private struct AlarmHealthDaySettingsBlock: View {
                 }
             }
             if let s = store.summary {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let steps = s.stepsToday {
-                        LabeledContent("Шаги сегодня") {
-                            Text(steps.formatted(.number.grouping(.automatic)))
-                        }
-                    }
-                    if let kcal = s.activeEnergyKcal, kcal >= 1 {
-                        LabeledContent("Активность") {
-                            Text("≈ \(Int(kcal.rounded())) ккал")
-                        }
-                    }
-                    if let sleep = s.sleepLastNightHours {
-                        LabeledContent("Сон прошлой ночью") {
-                            Text(formatSleepHours(sleep))
-                        }
-                    }
-                }
-                .font(.subheadline)
+                HealthMetricTilesBlock(summary: s, isStaleCached: false, isDemoSample: false)
             }
             Text(DayHealthTipBuilder.tips(from: store.summary))
                 .font(.caption)
@@ -656,12 +1242,282 @@ private struct AlarmHealthDaySettingsBlock: View {
         }
     }
 
+    @ViewBuilder
+    private var huaweiManualContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Ручной Huawei режим отключён. Используйте Huawei Auto для автоматической синхронизации.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var huaweiAutoContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Huawei Auto подключается один раз и дальше синхронизируется автоматически.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if !store.isHuaweiAutoConfigured {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Connect your device")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Подключите Huawei один раз, и данные сна/шагов/активности будут подтягиваться автоматически каждый день.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Connect Huawei") {
+                        showHuaweiConnectSheet = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.indigo)
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                )
+            }
+
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(store.isHuaweiAutoConfigured ? Color.green : Color.gray)
+                    .frame(width: 8, height: 8)
+                Text(store.isHuaweiAutoConfigured ? "Connected" : "Not connected")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(store.isHuaweiAutoConfigured ? .green : .secondary)
+                Text("· \(store.huaweiSourceKind.title)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if store.isHuaweiAutoConfigured {
+                    Text("· \(store.huaweiAutoHostLabel)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            if store.isHuaweiAutoConfigured {
+                Text("Sleep-day: \(store.effectiveAnalyticsDate.formatted(date: .abbreviated, time: .omitted))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if let s = store.summary {
+                    HealthMetricTilesBlock(
+                        summary: s,
+                        isStaleCached: store.isHuaweiAutoDataStale,
+                        isDemoSample: store.huaweiPayloadIsDemo
+                    )
+                        .padding(.top, 4)
+                } else if store.isLoading {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Загружаем шаги и калории…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 4)
+                } else if store.lastErrorMessage == nil || store.lastErrorMessage?.isEmpty == true {
+                    Text("Подождите синхронизацию или нажмите Sync now — здесь появятся шаги, ккал и сон.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                }
+            }
+
+            HStack {
+                Button(store.isHuaweiAutoConfigured ? "Manage connection" : "Connect Huawei") {
+                    showHuaweiConnectSheet = true
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.indigo)
+
+                Button("Connected devices") {
+                    showConnectedDevicesSheet = true
+                }
+                .buttonStyle(.bordered)
+                .disabled(!store.isHuaweiAutoConfigured)
+
+                Text(store.huaweiAutoSyncEnabled ? "Auto sync ON" : "Auto sync OFF")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(store.huaweiAutoSyncEnabled ? .green : .secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
+
+                if store.isHuaweiAutoConfigured {
+                    Button("Disconnect", role: .destructive) {
+                        store.disconnectHuaweiAuto()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            LabeledContent("Connection") {
+                Text(store.isHuaweiAutoConfigured ? "Connected · \(store.huaweiAutoHostLabel)" : "Not connected")
+                    .foregroundStyle(store.isHuaweiAutoConfigured ? .green : .secondary)
+            }
+
+            if let last = store.lastHuaweiAutoSyncAt {
+                Text("Updated \(relativeSyncText(from: last))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if store.isHuaweiAutoConfigured && store.isHuaweiAutoDataStale {
+                Text("Data may be stale. Last successful sync is old, so these are cached values.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let err = store.lastErrorMessage, !err.isEmpty {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Connection issue")
+                            .font(.caption.weight(.semibold))
+                        Text(err)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Button("Retry") {
+                        Task { await store.syncHuaweiAutoNow() }
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                )
+            }
+
+            Text(DayHealthTipBuilder.tips(from: store.summary))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("AI Insights")
+                    .font(.subheadline.weight(.semibold))
+                Text("Сон, движение и калории — как это может влиять на бодрость утром (эвристика, не диагноз).")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(
+                    Array(DayHealthTipBuilder.insights(summary: store.summary, history: store.huaweiManualHistory).prefix(10).enumerated()),
+                    id: \.offset
+                ) { _, item in
+                    Text("• \(item)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var connectedDevicesContent: some View {
+        List {
+            Section("Devices") {
+                deviceRow(
+                    title: "Huawei Watch",
+                    subtitle: "Primary wearable source",
+                    isConnected: store.huaweiSourceKind == .watch && store.isHuaweiAutoConfigured
+                )
+                deviceRow(
+                    title: "Huawei Health app",
+                    subtitle: "Cloud sync provider",
+                    isConnected: store.isHuaweiAutoConfigured
+                )
+            }
+            Section("Connection") {
+                LabeledContent("Status", value: store.isHuaweiAutoConfigured ? "Connected" : "Not connected")
+                LabeledContent("Host", value: store.huaweiAutoHostLabel)
+                if let last = store.lastHuaweiAutoSyncAt {
+                    LabeledContent("Last sync", value: last.formatted(date: .abbreviated, time: .shortened))
+                }
+            }
+            Section("Actions") {
+                Button("Reconnect") {
+                    showConnectedDevicesSheet = false
+                    showHuaweiConnectSheet = true
+                }
+                Button("Re-authorize") {
+                    showConnectedDevicesSheet = false
+                    showHuaweiConnectSheet = true
+                }
+                Button("Sync now") {
+                    Task { await store.syncHuaweiAutoNow() }
+                }
+                .disabled(!store.isHuaweiAutoConfigured)
+            }
+        }
+        .navigationTitle("Connected Devices")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") { showConnectedDevicesSheet = false }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func deviceRow(title: String, subtitle: String, isConnected: Bool) -> some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(isConnected ? Color.green : Color.gray.opacity(0.5))
+                .frame(width: 10, height: 10)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(isConnected ? "Connected" : "Not connected")
+                .font(.caption)
+                .foregroundStyle(isConnected ? .green : .secondary)
+        }
+    }
+
     private func formatSleepHours(_ h: Double) -> String {
         let t = (h * 10).rounded() / 10
         if t == floor(t) {
             return "~\(Int(t)) ч"
         }
         return String(format: "~%.1f ч", t)
+    }
+
+    @ViewBuilder
+    private func serviceBadge(title: String, isSelected: Bool, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.caption.weight(.semibold))
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.75))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isSelected ? Color.indigo.opacity(0.55) : Color.white.opacity(0.1))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func relativeSyncText(from date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f.localizedString(for: date, relativeTo: Date())
     }
     #endif
 }
@@ -1452,17 +2308,18 @@ final class AlarmViewModel: ObservableObject {
                 UserDefaults.standard.set(false, forKey: Self.morningWakeScheduledKey)
                 return
             }
+            let lockReady = await AlarmLocalFileStorage.prepareLockScreenNotifyClip()
+            guard lockReady else {
+                lastErrorMessage = "Your file isn’t ready for the lock screen yet. Open Alarm sound → Files, pick the track again, wait a moment, then try again. If it keeps failing, try M4A or a shorter MP3."
+                lastScheduledFireDate = nil
+                lockScreenNotifyReady = false
+                UserDefaults.standard.set(false, forKey: Self.morningWakeScheduledKey)
+                return
+            }
+            lockScreenNotifyReady = true
+        } else {
+            lockScreenNotifyReady = AlarmLocalFileStorage.hasLockScreenNotifyClipReady()
         }
-
-        let lockReady = await AlarmLocalFileStorage.prepareLockScreenNotifyClip()
-        guard lockReady else {
-            lastErrorMessage = "Your file isn’t ready for the lock screen yet. Open Alarm sound → Files, pick the track again, wait a moment, then try again. If it keeps failing, try M4A or a shorter MP3."
-            lastScheduledFireDate = nil
-            lockScreenNotifyReady = false
-            UserDefaults.standard.set(false, forKey: Self.morningWakeScheduledKey)
-            return
-        }
-        lockScreenNotifyReady = true
 
         let effectiveWindow = effectiveWindowMinutes(baseWindow: windowMinutes)
         let date: Date?
