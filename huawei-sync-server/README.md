@@ -36,6 +36,18 @@ Use in app:
 
 После деплоя новые регистрации появятся в **Table Editor** → `app_registrations`. Ответ API будет содержать поле `supabase`: `{ synced: true }` или ошибку синка.
 
+Выполните также **`002_app_registrations_anon_insert.sql`**, если хотите **прямую вставку из iOS** (публичный anon key в приложении).
+
+### Прямое подключение iOS → Supabase
+
+1. В Supabase: **Settings → API** — скопируйте **Project URL** и **anon public** key.
+2. В Xcode: Target → **Info** → пользовательские ключи (или `Info.plist`):
+   - `SUPABASE_URL` = `https://xxxx.supabase.co`
+   - `SUPABASE_ANON_KEY` = `eyJhbG...` (anon, не service_role!)
+3. Убедитесь, что выполнены SQL из `001_...` и `002_...`.
+
+Приложение после успешной регистрации на Render дополнительно шлёт строку в `app_registrations` через PostgREST (см. `SupabaseDirectRegistration.swift` в проекте).
+
 ## Notes
 
 - Keep `.env` private; never commit it.

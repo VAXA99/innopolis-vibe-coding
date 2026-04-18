@@ -240,6 +240,12 @@ struct ContentView: View {
                     if !payload.accessToken.isEmpty {
                         defaults.set(payload.accessToken, forKey: "dayHealth.huaweiAuto.token")
                     }
+                    Task {
+                        await SupabaseDirectRegistration.syncUserAfterSignup(
+                            email: payload.email,
+                            fullName: payload.fullName
+                        )
+                    }
                     isUserRegistered = true
                     showRegistrationLanding = false
                 }

@@ -14,5 +14,9 @@
 	</array>
 	<key>REGISTRATION_API_BASE_URL</key>
 	<string>https://innopolis-vibe-coding.onrender.com</string>
+	<key>SUPABASE_URL</key>
+	<string></string>
+	<key>SUPABASE_ANON_KEY</key>
+	<string></string>
 </dict>
 </plist>
