@@ -75,7 +75,11 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { ok: false, error: "Invalid JSON body" });
       }
       const out = registerUser(body);
-      return sendJson(res, out.ok ? 200 : 400, out);
+      if (!out.ok) {
+        return sendJson(res, 400, out);
+      }
+      const supabase = await syncRegistrationToSupabase(out.user);
+      return sendJson(res, 200, { ...out, supabase });
     }
 
     if (req.method === "GET" && pathname === "/v1/huawei/oauth/callback") {
@@ -251,6 +255,49 @@ function registerUser(body) {
       createdAt
     }
   };
+}
+
+/** Дублирование регистрации в Supabase Postgres (если заданы SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY). */
+let supabaseClient = null;
+function getSupabaseClient() {
+  const url = (process.env.SUPABASE_URL || "").trim();
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+  if (!url || !key) return null;
+  if (!supabaseClient) {
+    // eslint-disable-next-line global-require
+    const { createClient } = require("@supabase/supabase-js");
+    supabaseClient = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+  }
+  return supabaseClient;
+}
+
+async function syncRegistrationToSupabase(user) {
+  const sb = getSupabaseClient();
+  if (!sb) {
+    return { synced: false, skipped: true, reason: "Supabase env not set" };
+  }
+  try {
+    const row = {
+      email: user.email,
+      full_name: user.fullName ?? null,
+      registered_at: user.createdAt || new Date().toISOString()
+    };
+    const { error } = await sb.from("app_registrations").upsert(row, {
+      onConflict: "email"
+    });
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.warn("Supabase upsert:", error.message);
+      return { synced: false, error: error.message };
+    }
+    return { synced: true };
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("Supabase sync:", e);
+    return { synced: false, error: String(e?.message || e) };
+  }
 }
 
 function buildAdminDashboardHtml() {

@@ -23,6 +23,19 @@ Use in app:
 - Endpoint: `https://<your-render-app>.onrender.com/v1/huawei/summary`
 - Access token: `API_TOKEN`
 
+## Supabase (опционально)
+
+Регистрации из приложения (`POST /v1/auth/register`) можно дублировать в Postgres Supabase для таблиц и SQL в дашборде.
+
+1. Создайте проект на [supabase.com](https://supabase.com) (бесплатный tier).
+2. **SQL Editor** → выполните скрипт из `supabase/migrations/001_app_registrations.sql`.
+3. **Project Settings → API**: скопируйте **Project URL** и **service_role** (секретный ключ).
+4. На Render (или в `.env` локально) задайте:
+   - `SUPABASE_URL=https://xxxx.supabase.co`
+   - `SUPABASE_SERVICE_ROLE_KEY=eyJ...` (только на сервере, не в iOS-приложении).
+
+После деплоя новые регистрации появятся в **Table Editor** → `app_registrations`. Ответ API будет содержать поле `supabase`: `{ synced: true }` или ошибку синка.
+
 ## Notes
 
 - Keep `.env` private; never commit it.
