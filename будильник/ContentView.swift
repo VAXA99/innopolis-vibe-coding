@@ -11,6 +11,8 @@ private struct HealthMetricTilesBlock: View {
     var isStaleCached: Bool = false
     /// Сервер отдал демо/заглушку — цифры не из Huawei Health на телефоне.
     var isDemoSample: Bool = false
+    /// См. `DayHealthSummary.stepsAndEnergyAreNightExtendedSlice` (можно задать явно для Huawei, где флага нет).
+    var useExtendedActivitySlice: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -45,14 +47,14 @@ private struct HealthMetricTilesBlock: View {
                 metricTile(
                     title: "Шаги",
                     value: stepsText,
-                    footnote: "за день",
+                    footnote: useExtendedActivitySlice ? "вчера+сегодня" : "за день",
                     icon: "figure.walk",
                     accent: .cyan
                 )
                 metricTile(
                     title: "Ккал",
                     value: kcalText,
-                    footnote: "активные",
+                    footnote: useExtendedActivitySlice ? "вчера+сегодня" : "активные",
                     icon: "flame.fill",
                     accent: .orange
                 )
@@ -752,7 +754,8 @@ private struct AlarmSetupStepView: View {
                                 HealthMetricTilesBlock(
                                     summary: summary,
                                     isStaleCached: healthInsights.dataSourceMode == .huaweiAuto && healthInsights.isHuaweiAutoDataStale,
-                                    isDemoSample: healthInsights.dataSourceMode == .huaweiAuto && healthInsights.huaweiPayloadIsDemo
+                                    isDemoSample: healthInsights.dataSourceMode == .huaweiAuto && healthInsights.huaweiPayloadIsDemo,
+                                    useExtendedActivitySlice: summary.stepsAndEnergyAreNightExtendedSlice
                                 )
                                 .padding(.top, 4)
                                 Text(DayHealthTipBuilder.tips(from: summary))
@@ -766,10 +769,17 @@ private struct AlarmSetupStepView: View {
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                             } else {
-                                Text("Подключите Apple Health или Huawei Auto в настройках, чтобы получать персональные рекомендации к вечеру и прогноз бодрости утром.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                if healthInsights.dataSourceMode == .huaweiAuto, !healthInsights.isHuaweiAutoConfigured {
+                                    Text("Сейчас выбран источник Huawei, но backend не настроен — цифры с Apple Health не подставятся. Настройки (шестерёнка) → Health services → чип «Apple Health», затем «Разрешить доступ к Health».")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange.opacity(0.95))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                } else {
+                                    Text("Подключите Apple Health или Huawei Auto в настройках, чтобы получать персональные рекомендации к вечеру и прогноз бодрости утром.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                             }
                         }
                     }
@@ -1283,15 +1293,27 @@ private struct AlarmHealthDaySettingsBlock: View {
                         .foregroundStyle(.secondary)
                 case .denied:
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Доступ к данным Health отклонён. Включите чтение шагов и сна в Настройках.")
+                        Text("Доступ к данным Health отклонён. Включите чтение: шаги, сон, активная энергия для этого приложения.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Button("Открыть настройки приложения") {
-                            guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-                            UIApplication.shared.open(url)
+                        Text("Важно: Системные Настройки → Здоровье → Данные (или «Доступ к данным и устройствам») → ваше приложение — и включите категории. Кнопка «настройки приложения» открывает другой экран и не даёт переключатели Health.")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 8) {
+                            Button("Настройки → Здоровье (система)") {
+                                if let u = URL(string: "x-apple-health://") {
+                                    UIApplication.shared.open(u)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            Button("Настройки этого приложения") {
+                                guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                                UIApplication.shared.open(url)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.indigo)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.indigo)
                     }
                 case .shouldRequest, .unknown:
                     VStack(alignment: .leading, spacing: 10) {
@@ -1309,7 +1331,18 @@ private struct AlarmHealthDaySettingsBlock: View {
                 }
             }
             if let err = store.lastErrorMessage, !err.isEmpty {
-                EmptyView()
+                Text(err)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onChange(of: store.dataSourceMode) { _, newMode in
+            Task { @MainActor in
+                if newMode == .appleHealth {
+                    await store.refreshAuthorizationState()
+                }
+                await store.reloadSummary()
             }
         }
         .onAppear {
@@ -1397,9 +1430,12 @@ private struct AlarmHealthDaySettingsBlock: View {
                             Text("06:00").tag(6)
                         }
                         .pickerStyle(.menu)
-                        Text("After midnight, metrics are still counted as previous day until this hour.")
+                        Text("From midnight until this time, steps and active calories are summed as calendar yesterday plus today. After the boundary, the interval matches the Health app’s «Сегодня».")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                        Text("00:00 = from midnight, only the calendar day (no blend). Use 04:00 for typical «night-owl» sleep. If steps looked wrong at 1–2 a.m., pick 04:00 here and reload.")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                         if showAdvancedBridge {
                             LabeledContent("Source host", value: store.huaweiAutoHostLabel)
                             if let last = store.lastHuaweiAutoSyncAt {
@@ -1441,16 +1477,33 @@ private struct AlarmHealthDaySettingsBlock: View {
                 }
             }
             if let s = store.summary {
-                HealthMetricTilesBlock(summary: s, isStaleCached: false, isDemoSample: false)
+                HealthMetricTilesBlock(
+                    summary: s,
+                    isStaleCached: false,
+                    isDemoSample: false,
+                    useExtendedActivitySlice: s.stepsAndEnergyAreNightExtendedSlice
+                )
+            }
+            if !store.isLoading, store.appleHealthSummaryHasNoValues {
+                Text("Пока нет цифр: в «Здоровье» нет согласованных данных (шаги, сон, энергия) или в iOS: Настройки → Здоровье → Данные → это приложение — не все категории включены. Нажмите «Обновить» после исправления.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Text(DayHealthTipBuilder.tips(from: store.summary))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Обновить данные") {
-                Task { await store.reloadSummary() }
+            HStack(spacing: 8) {
+                Button("Обновить данные") {
+                    Task { await store.reloadSummary() }
+                }
+                .buttonStyle(.bordered)
+                Button("Открыть Здоровье") {
+                    if let u = URL(string: "x-apple-health://") { UIApplication.shared.open(u) }
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
         }
     }
 
@@ -1516,7 +1569,8 @@ private struct AlarmHealthDaySettingsBlock: View {
                     HealthMetricTilesBlock(
                         summary: s,
                         isStaleCached: store.isHuaweiAutoDataStale,
-                        isDemoSample: store.huaweiPayloadIsDemo
+                        isDemoSample: store.huaweiPayloadIsDemo,
+                        useExtendedActivitySlice: s.stepsAndEnergyAreNightExtendedSlice
                     )
                         .padding(.top, 4)
                 } else if store.isLoading {
@@ -2542,7 +2596,7 @@ final class AlarmViewModel: ObservableObject {
                     sound: selectedSound,
                     followupCount: 1,
                     followupIntervalMinutes: 5,
-                    weekdays: [wakeWeekday]
+                    weekdays: Set([wakeWeekday])
                 )
         } catch {
             lastErrorMessage = "Failed to set alarm. Please try again."

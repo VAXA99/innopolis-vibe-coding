@@ -30,6 +30,7 @@ enum AlarmKitAlarmLifecycleObserver {
                                 object: nil,
                                 userInfo: [Notification.Name.smartAlarmFireDateUserInfoKey: Date()]
                             )
+                            AlarmKitWakeScheduler.clearPersistedAfterAlertHandled()
                         }
                     } else {
                         lastPostedAlerting = false

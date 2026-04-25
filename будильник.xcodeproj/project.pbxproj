@@ -282,9 +282,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "";
-				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "будильник/Alarm.entitlements";
-				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "будильник/Alarm.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "будильник/будильник.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = A26U3CXK27;
@@ -293,7 +291,8 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "будильник/Info.plist";
-				INFOPLIST_KEY_NSAppleMusicUsageDescription = "We need access to your music library so you can choose an alarm melody.";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "We need access to Apple Music to play the song you choose as your alarm.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Читаем шаги за сегодня и сон из «Здоровья», чтобы показать короткую сводку и совет к вечеру. Данные не отправляются с устройства.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -331,9 +330,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "";
-				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "будильник/Alarm.entitlements";
-				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "будильник/Alarm.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "будильник/будильник.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = A26U3CXK27;
@@ -342,7 +339,8 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "будильник/Info.plist";
-				INFOPLIST_KEY_NSAppleMusicUsageDescription = "We need access to your music library so you can choose an alarm melody.";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "We need access to Apple Music to play the song you choose as your alarm.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Читаем шаги за сегодня и сон из «Здоровья», чтобы показать короткую сводку и совет к вечеру. Данные не отправляются с устройства.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

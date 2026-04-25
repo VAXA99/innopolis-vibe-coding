@@ -2,12 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>NSAlarmKitUsageDescription</key>
-	<string>We schedule your wake-up alarm so it can ring on the lock screen like the Clock app, including when the phone is muted.</string>
-	<key>NSAppleMusicUsageDescription</key>
-	<string>We need access to Apple Music to play the song you choose as your alarm.</string>
-	<key>NSHealthShareUsageDescription</key>
-	<string>Читаем шаги за сегодня и сон из «Здоровья», чтобы показать короткую сводку и совет к вечеру. Данные не отправляются с устройства.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -19,15 +13,17 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>We schedule your wake-up alarm so it can ring on the lock screen like the Clock app, including when the phone is muted.</string>
+	<key>REGISTRATION_API_BASE_URL</key>
+	<string>https://innopolis-vibe-coding.onrender.com</string>
+	<key>SUPABASE_ANON_KEY</key>
+	<string>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZkbG5uYXp1eG12YXRuaHNnbHV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4NjU3NzgsImV4cCI6MjA5MTQ0MTc3OH0.2ssbr2K0JLGWljeiEf5CluwzrbV5-8VszvpwwvWAR2U</string>
+	<key>SUPABASE_URL</key>
+	<string>https://vdlnnazuxmvatnhsglut.supabase.co</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
 	</array>
-	<key>REGISTRATION_API_BASE_URL</key>
-	<string>https://innopolis-vibe-coding.onrender.com</string>
-	<key>SUPABASE_URL</key>
-	<string>https://vdlnnazuxmvatnhsglut.supabase.co</string>
-	<key>SUPABASE_ANON_KEY</key>
-	<string>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZkbG5uYXp1eG12YXRuaHNnbHV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4NjU3NzgsImV4cCI6MjA5MTQ0MTc3OH0.2ssbr2K0JLGWljeiEf5CluwzrbV5-8VszvpwwvWAR2U</string>
 </dict>
 </plist>

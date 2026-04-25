@@ -9,6 +9,8 @@ struct DayHealthSummary: Sendable, Equatable {
     var stepsToday: Int?
     var activeEnergyKcal: Double?
     var sleepLastNightHours: Double?
+    /// До «границы сна» (см. `analyticsDayCutoffHour`) шаги/ккал — вчера 00:00…сейчас, не только «сегодня с полуночи».
+    var stepsAndEnergyAreNightExtendedSlice: Bool = false
 }
 
 struct DayHealthDailyRecord: Sendable, Equatable, Codable, Identifiable {
@@ -27,7 +29,10 @@ enum DayHealthTipBuilder {
         if let sleep = summary.sleepLastNightHours, sleep < 6.5 {
             return "Сон прошлой ночью короткий (~\(String(format: "%.1f", sleep)) ч). Сегодня лучше не тянуть отбой и снизить кофеин вечером."
         }
-        if let steps = summary.stepsToday, steps < 4000 {
+        if summary.stepsAndEnergyAreNightExtendedSlice, let s = summary.stepsToday, s < 4000 {
+            return "Сейчас (до границы в настройках дня) шаги/ккал = вчера + сегодня с полуночи, поэтому «мало шагов» в 1–3 ночи с одной только полуночи в Health не совпадает — смотрите цифру вместе с вчера. Днём цифры снова как в «Сегодня» в Health."
+        }
+        if let steps = summary.stepsToday, steps < 4000, !summary.stepsAndEnergyAreNightExtendedSlice {
             return "Мало шагов сегодня — добавьте 10–15 минут прогулки до вечера, сон станет глубже."
         }
         if let kcal = summary.activeEnergyKcal, kcal >= 350 {
@@ -68,10 +73,10 @@ enum DayHealthTipBuilder {
                 out.append("Короткий сон при заметной активности (~\(Int(kcal.rounded())) ккал): вечером снизьте интенсивность и свет экрана — так проще восстановить сон.")
             }
         }
-        if let sleep = summary.sleepLastNightHours, sleep >= 7, let steps = summary.stepsToday, steps < 3500 {
+        if !summary.stepsAndEnergyAreNightExtendedSlice, let sleep = summary.sleepLastNightHours, sleep >= 7, let steps = summary.stepsToday, steps < 3500 {
             out.append("Сон в норме, но шагов мало — дневное движение поддерживает стабильный цикл сон–бодрствование.")
         }
-        if let avg = averageStepsLastDays(history, days: 7), let today = summary.stepsToday {
+        if !summary.stepsAndEnergyAreNightExtendedSlice, let avg = averageStepsLastDays(history, days: 7), let today = summary.stepsToday {
             let diff = Double(today) - avg
             if abs(diff) >= 800 {
                 let dir = diff > 0 ? "выше" : "ниже"
@@ -230,6 +235,8 @@ final class DayHealthInsightsStore: ObservableObject {
     private static let analyticsDayCutoffHourKey = "dayHealth.analytics.cutoffHour"
     private static let huaweiHistoryKey = "dayHealth.huawei.history.json"
     private static let renderDeviceIdKey = "dayHealth.renderDeviceId"
+    /// `true` после `requestAuthorization` — iOS нередко не переводит read-доступ в `sharingAuthorized`, оставляя `notDetermined`.
+    private static let hasRequestedHealthReadKey = "dayHealth.appleHealthReadRequested"
 
     /// Ensures `https` and `/v1/huawei/summary` when the user pastes only the Render host.
     private static func normalizedHuaweiEndpointString(_ raw: String) -> String {
@@ -277,6 +284,12 @@ final class DayHealthInsightsStore: ObservableObject {
         #endif
     }
 
+    /// Все поля `nil` — запросы не вернули значения (пусто в Health или нет доступа к категориям).
+    var appleHealthSummaryHasNoValues: Bool {
+        guard dataSourceMode == .appleHealth, let s = summary else { return false }
+        return s.stepsToday == nil && s.activeEnergyKcal == nil && s.sleepLastNightHours == nil
+    }
+
     var isHuaweiAutoConfigured: Bool {
         let u = huaweiAutoEndpointURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let t = huaweiAutoAccessToken.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -297,11 +310,28 @@ final class DayHealthInsightsStore: ObservableObject {
         return Date().timeIntervalSince(last) > 6 * 3600
     }
 
+    /// До `analyticsDayCutoffHour` (0…6) шаги/ккал считаем с полуночи **вчера** = календарный **вчера** + **сегодня** с 0:00 (суммарно, без «только 2 ночи как сегодня»).
+    var isInNightExtendedActivityWindow: Bool {
+        let h = Calendar.current.component(.hour, from: Date())
+        let cut = min(6, max(0, analyticsDayCutoffHour))
+        return h < cut
+    }
+
+    var startOfStepsOrEnergyQueryInterval: Date {
+        let cal = Calendar.current
+        let now = Date()
+        if isInNightExtendedActivityWindow {
+            return cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: now)) ?? cal.startOfDay(for: now)
+        }
+        return cal.startOfDay(for: now)
+    }
+
     var effectiveAnalyticsDate: Date {
         let cal = Calendar.current
         let now = Date()
         let todayStart = cal.startOfDay(for: now)
-        guard let boundary = cal.date(byAdding: .hour, value: analyticsDayCutoffHour, to: todayStart) else {
+        let cutH = min(6, max(0, analyticsDayCutoffHour))
+        guard let boundary = cal.date(byAdding: .hour, value: cutH, to: todayStart) else {
             return todayStart
         }
         if now >= boundary {
@@ -311,8 +341,9 @@ final class DayHealthInsightsStore: ObservableObject {
     }
 
     init() {
-        let raw = UserDefaults.standard.string(forKey: Self.modeKey) ?? DataSourceMode.huaweiAuto.rawValue
-        dataSourceMode = DataSourceMode(rawValue: raw) ?? .huaweiAuto
+        // По умолчанию Apple Health (MVP); Huawei — по явному выбору, когда задан API.
+        let raw = UserDefaults.standard.string(forKey: Self.modeKey) ?? DataSourceMode.appleHealth.rawValue
+        dataSourceMode = DataSourceMode(rawValue: raw) ?? .appleHealth
         huaweiAutoEndpointURL = Self.normalizedHuaweiEndpointString(
             UserDefaults.standard.string(forKey: Self.huaweiAutoEndpointKey) ?? ""
         )
@@ -329,8 +360,15 @@ final class DayHealthInsightsStore: ObservableObject {
         } else {
             huaweiAutoSyncEnabled = UserDefaults.standard.bool(forKey: Self.huaweiAutoSyncEnabledKey)
         }
-        let cut = UserDefaults.standard.integer(forKey: Self.analyticsDayCutoffHourKey)
-        analyticsDayCutoffHour = (0 ... 6).contains(cut) ? cut : 4
+        // `integer(forKey:)` = 0 если ключа нет, поэтому нельзя сразу трактовать как «00:00» — тогда
+        // `h < 0` и никогда не включится вчера+сегодня. Явно отсутствующий ключ → 04:00 по умолчанию.
+        if UserDefaults.standard.object(forKey: Self.analyticsDayCutoffHourKey) == nil {
+            analyticsDayCutoffHour = 4
+            UserDefaults.standard.set(4, forKey: Self.analyticsDayCutoffHourKey)
+        } else {
+            let cut = UserDefaults.standard.integer(forKey: Self.analyticsDayCutoffHourKey)
+            analyticsDayCutoffHour = (0 ... 6).contains(cut) ? cut : 4
+        }
         loadHuaweiHistory()
     }
 
@@ -351,7 +389,8 @@ final class DayHealthInsightsStore: ObservableObject {
     func healthRecordsForBackendUpload() -> [DayHealthDailyRecord] {
         switch dataSourceMode {
         case .appleHealth:
-            let iso = dayISO(for: effectiveAnalyticsDate)
+            // Дата строки = календарный день сегодня, как у шагов/ккал (не сдвиг `effectiveAnalyticsDate` до 4:00).
+            let iso = dayISO(for: Calendar.current.startOfDay(for: Date()))
             guard let s = summary else { return [] }
             return [
                 DayHealthDailyRecord(
@@ -458,17 +497,25 @@ final class DayHealthInsightsStore: ObservableObject {
             authorizationState = .unavailable
             return
         }
-        let status = healthStore.authorizationStatus(for: HKObjectType.quantityType(forIdentifier: .stepCount)!)
+        let stepType = HKObjectType.quantityType(forIdentifier: .stepCount)!
+        let status = healthStore.authorizationStatus(for: stepType)
+        let askedBefore = UserDefaults.standard.bool(forKey: Self.hasRequestedHealthReadKey)
+        var next: HealthAuthorizationState
         switch status {
         case .notDetermined:
-            authorizationState = .shouldRequest
+            next = askedBefore ? .sharingAuthorized : .shouldRequest
         case .sharingDenied:
-            authorizationState = .denied
+            next = .denied
         case .sharingAuthorized:
-            authorizationState = .sharingAuthorized
+            next = .sharingAuthorized
         @unknown default:
-            authorizationState = .unknown
+            next = askedBefore ? .sharingAuthorized : .unknown
         }
+        // Read-only: `authorizationStatus` врёт (часто `.sharingDenied`), пока в Health включены тумблеры чтения. Реальная проверка — тестовый `HKSampleQuery`.
+        if next == .denied, await readAccessProbeSucceeds() {
+            next = .sharingAuthorized
+        }
+        authorizationState = next
         #else
         authorizationState = .unavailable
         #endif
@@ -487,6 +534,7 @@ final class DayHealthInsightsStore: ObservableObject {
         ]
         do {
             try await healthStore.requestAuthorization(toShare: [], read: types)
+            UserDefaults.standard.set(true, forKey: Self.hasRequestedHealthReadKey)
             await refreshAuthorizationState()
             await reloadSummary()
         } catch {
@@ -518,7 +566,16 @@ final class DayHealthInsightsStore: ObservableObject {
             summary = nil
             return
         }
-        guard authorizationState == .sharingAuthorized else {
+        // Явный отказ — не пытаемся читать. Остальное: после `request` и при кваке notDetermined+read считаем, что read можно пробовать.
+        if authorizationState == .denied || authorizationState == .unavailable {
+            summary = nil
+            return
+        }
+        if authorizationState == .shouldRequest, !UserDefaults.standard.bool(forKey: Self.hasRequestedHealthReadKey) {
+            summary = nil
+            return
+        }
+        if authorizationState == .unknown, !UserDefaults.standard.bool(forKey: Self.hasRequestedHealthReadKey) {
             summary = nil
             return
         }
@@ -526,10 +583,12 @@ final class DayHealthInsightsStore: ObservableObject {
         let steps = await querySteps()
         let energy = await queryEnergy()
         let sleep = await querySleepHours()
+        let extended = isInNightExtendedActivityWindow
         summary = DayHealthSummary(
             stepsToday: steps,
             activeEnergyKcal: energy,
-            sleepLastNightHours: sleep
+            sleepLastNightHours: sleep,
+            stepsAndEnergyAreNightExtendedSlice: extended
         )
         #else
         summary = nil
@@ -537,10 +596,40 @@ final class DayHealthInsightsStore: ObservableObject {
     }
 
     #if os(iOS) && canImport(HealthKit)
+    /// Реальное «можно ли читать шаги» — `authorizationStatus` для read-only ненадёжен.
+    private func readAccessProbeSucceeds() async -> Bool {
+        guard let step = HKObjectType.quantityType(forIdentifier: .stepCount) else { return false }
+        return await withCheckedContinuation { cont in
+            let from = Date().addingTimeInterval(-7 * 24 * 60 * 60)
+            let pred = HKQuery.predicateForSamples(withStart: from, end: Date(), options: .strictStartDate)
+            let q = HKSampleQuery(
+                sampleType: step,
+                predicate: pred,
+                limit: 1,
+                sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)]
+            ) { _, _, error in
+                if error == nil {
+                    DispatchQueue.main.async { cont.resume(returning: true) }
+                    return
+                }
+                let ns = error! as NSError
+                if ns.domain == HKError.errorDomain, ns.code == HKError.errorAuthorizationDenied.rawValue {
+                    DispatchQueue.main.async { cont.resume(returning: false) }
+                } else if ns.domain == HKError.errorDomain, ns.code == HKError.errorAuthorizationNotDetermined.rawValue {
+                    DispatchQueue.main.async { cont.resume(returning: false) }
+                } else {
+                    // Иные ошибки — осторожно считаем, что read недоступен; при необходимости снимите, если в логах сеть и т.д.
+                    DispatchQueue.main.async { cont.resume(returning: false) }
+                }
+            }
+            healthStore.execute(q)
+        }
+    }
+
     private func querySteps() async -> Int? {
         guard let type = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return nil }
-        let start = effectiveAnalyticsDate
         let end = Date()
+        let start = startOfStepsOrEnergyQueryInterval
         let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
         return await withCheckedContinuation { cont in
             let q = HKStatisticsQuery(quantityType: type, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, stats, _ in
@@ -553,8 +642,8 @@ final class DayHealthInsightsStore: ObservableObject {
 
     private func queryEnergy() async -> Double? {
         guard let type = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) else { return nil }
-        let start = effectiveAnalyticsDate
         let end = Date()
+        let start = startOfStepsOrEnergyQueryInterval
         let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
         return await withCheckedContinuation { cont in
             let q = HKStatisticsQuery(quantityType: type, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, stats, _ in
@@ -568,8 +657,9 @@ final class DayHealthInsightsStore: ObservableObject {
     private func querySleepHours() async -> Double? {
         guard let type = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
         let cal = Calendar.current
-        let end = effectiveAnalyticsDate
-        guard let start = cal.date(byAdding: .day, value: -1, to: end) else { return nil }
+        // Раньше `end` = effectiveAnalyticsDate мог быть «вчера 00:00» ночью, и сон, **закончившийся** сегодня, не попадал. Берём с **вчера 00:00** до **сейчас**.
+        let end = Date()
+        guard let start = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: end)) else { return nil }
         let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
         return await withCheckedContinuation { cont in
             let q = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
@@ -610,7 +700,8 @@ final class DayHealthInsightsStore: ObservableObject {
         return DayHealthSummary(
             stepsToday: rec.steps,
             activeEnergyKcal: rec.activeEnergyKcal,
-            sleepLastNightHours: rec.sleepHours
+            sleepLastNightHours: rec.sleepHours,
+            stepsAndEnergyAreNightExtendedSlice: isInNightExtendedActivityWindow
         )
     }
 
@@ -640,10 +731,11 @@ final class DayHealthInsightsStore: ObservableObject {
         do {
             let payload = try await fetchHuaweiAutoPayload()
             huaweiPayloadIsDemo = payload.isDemoData
-            summary = payload.summary
+            var s = payload.summary
+            s.stepsAndEnergyAreNightExtendedSlice = isInNightExtendedActivityWindow
+            summary = s
             mergeHistory(payload.history)
             let todayISO = dayISO(for: effectiveAnalyticsDate)
-            let s = payload.summary
             mergeHistory([
                 DayHealthDailyRecord(
                     dateISO: todayISO,

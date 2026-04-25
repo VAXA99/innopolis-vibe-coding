@@ -12,13 +12,29 @@ struct SmartAlarmKitMetadata: AlarmKit.AlarmMetadata {}
 @available(iOS 26.0, *)
 enum AlarmKitWakeScheduler {
     static let storedAlarmUUIDKey = "alarmkit.mainWake.uuid"
+    private static let storedMainWakeFireDateKey = "alarmkit.mainWake.fireDateInterval"
+
+    /// Сбрасывает UUID и время, без обращения к `AlarmManager` (после `stop` при срабатывании).
+    static func clearPersistedAfterAlertHandled() {
+        UserDefaults.standard.removeObject(forKey: storedAlarmUUIDKey)
+        UserDefaults.standard.removeObject(forKey: storedMainWakeFireDateKey)
+    }
+
+    /// Ближайшее время основного срабатывания, если ведётся AlarmKit-календарь.
+    static func mainWakeScheduledFireDate() -> Date? {
+        guard UserDefaults.standard.string(forKey: storedAlarmUUIDKey) != nil else { return nil }
+        let raw = UserDefaults.standard.double(forKey: storedMainWakeFireDateKey)
+        if raw <= 0 { return nil }
+        return Date(timeIntervalSince1970: raw)
+    }
 
     /// Отменяет ранее запланированный AlarmKit-будильник (если был).
     static func cancelScheduledWake() {
-        guard let raw = UserDefaults.standard.string(forKey: storedAlarmUUIDKey),
-              let id = UUID(uuidString: raw) else { return }
-        try? AlarmKit.AlarmManager.shared.cancel(id: id)
+        if let raw = UserDefaults.standard.string(forKey: storedAlarmUUIDKey), let id = UUID(uuidString: raw) {
+            try? AlarmKit.AlarmManager.shared.cancel(id: id)
+        }
         UserDefaults.standard.removeObject(forKey: storedAlarmUUIDKey)
+        UserDefaults.standard.removeObject(forKey: storedMainWakeFireDateKey)
     }
 
     /// Планирует одноразовый будильник на точное время. При успехе локальное уведомление `smart_alarm_wakeup` не нужно.
@@ -61,6 +77,7 @@ enum AlarmKitWakeScheduler {
         let id = UUID()
         _ = try await kit.schedule(id: id, configuration: configuration)
         UserDefaults.standard.set(id.uuidString, forKey: storedAlarmUUIDKey)
+        UserDefaults.standard.set(fireDate.timeIntervalSince1970, forKey: storedMainWakeFireDateKey)
         return true
     }
 
