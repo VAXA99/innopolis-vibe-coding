@@ -107,7 +107,7 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { ok: false, error: "Invalid JSON body" });
       }
       const out = await createPasswordResetRequest(body, req);
-      return sendJson(res, out.ok ? 200 : 400, out);
+      return sendJson(res, out.ok ? 200 : 502, out);
     }
 
     if (req.method === "GET" && pathname === "/v1/huawei/oauth/callback") {
@@ -360,7 +360,15 @@ async function createPasswordResetRequest(body, req) {
   const mail = await sendPasswordResetEmail(email, resetLink);
   if (!mail.sent) {
     // eslint-disable-next-line no-console
+    console.log(`[auth] reset mail failed for ${email}: ${mail.reason}`);
+    // eslint-disable-next-line no-console
     console.log(`[auth] Password reset link for ${email}: ${resetLink}`);
+    return {
+      ok: false,
+      error: `Password reset email delivery failed: ${mail.reason}`,
+      hint:
+        "Check Render env (RESEND_API_KEY, RESET_EMAIL_FROM, RESET_LINK_BASE_URL) and Resend domain/sender verification."
+    };
   }
 
   return { ok: true, message: "Reset link sent. Check your email." };

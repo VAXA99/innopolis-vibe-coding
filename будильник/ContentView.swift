@@ -875,16 +875,20 @@ private struct AlarmRegistrationLandingView: View {
         req.timeoutInterval = 45
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: req)
+            let (responseData, response) = try await URLSession.shared.data(for: req)
             guard let http = response as? HTTPURLResponse else {
                 errorMessage = "Нет ответа от сервера. Проверьте интернет."
                 return
             }
             guard (200 ... 299).contains(http.statusCode) else {
+                let hint = String(data: responseData, encoding: .utf8) ?? ""
                 if http.statusCode == 404 {
                     errorMessage = "Сервер ещё не обновлён: сброс пароля недоступен (404 /v1/auth/forgot-password)."
                 } else {
                     errorMessage = "Не удалось отправить письмо для сброса пароля."
+                }
+                if !hint.isEmpty {
+                    errorMessage += " \(String(hint.prefix(220)))"
                 }
                 return
             }
