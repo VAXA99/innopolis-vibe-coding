@@ -88,6 +88,28 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ...out, supabase });
     }
 
+    if (req.method === "POST" && pathname === "/v1/auth/login") {
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        return sendJson(res, 400, { ok: false, error: "Invalid JSON body" });
+      }
+      const out = await loginUser(body);
+      return sendJson(res, out.ok ? 200 : 401, out);
+    }
+
+    if (req.method === "POST" && pathname === "/v1/auth/forgot-password") {
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        return sendJson(res, 400, { ok: false, error: "Invalid JSON body" });
+      }
+      const out = await createPasswordResetRequest(body, req);
+      return sendJson(res, out.ok ? 200 : 400, out);
+    }
+
     if (req.method === "GET" && pathname === "/v1/huawei/oauth/callback") {
       return await handleOAuthCallback(res, url);
     }
@@ -220,6 +242,10 @@ function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
 
+function hashPassword(password, salt) {
+  return crypto.pbkdf2Sync(String(password || ""), salt, 100000, 32, "sha256").toString("hex");
+}
+
 function registerUser(body) {
   if (!body || typeof body !== "object") {
     return { ok: false, error: "Expected JSON object" };
@@ -241,7 +267,7 @@ function registerUser(body) {
   }
 
   const salt = crypto.randomBytes(16).toString("hex");
-  const passwordHash = crypto.pbkdf2Sync(password, salt, 100000, 32, "sha256").toString("hex");
+  const passwordHash = hashPassword(password, salt);
   const createdAt = new Date().toISOString();
 
   store.users[email] = {
@@ -261,6 +287,114 @@ function registerUser(body) {
       createdAt
     }
   };
+}
+
+async function loginUser(body) {
+  if (!body || typeof body !== "object") {
+    return { ok: false, error: "Expected JSON object" };
+  }
+  const email = normalizeEmail(body.email);
+  const password = String(body.password || "");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 6) {
+    return { ok: false, error: "Invalid credentials" };
+  }
+
+  const store = loadUserStore();
+  const user = store.users[email];
+  if (!user || !user.salt || !user.passwordHash) {
+    return { ok: false, error: "Invalid credentials" };
+  }
+
+  const calc = hashPassword(password, user.salt);
+  const a = Buffer.from(calc, "hex");
+  const b = Buffer.from(user.passwordHash, "hex");
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return { ok: false, error: "Invalid credentials" };
+  }
+
+  let paid = false;
+  const supabaseProfile = await loadSupabaseProfileByEmail(email);
+  if (supabaseProfile && supabaseProfile.paid === true) {
+    paid = true;
+  }
+
+  return {
+    ok: true,
+    user: {
+      email: user.email,
+      fullName: user.fullName ?? null,
+      createdAt: user.createdAt ?? null
+    },
+    paid
+  };
+}
+
+async function createPasswordResetRequest(body, req) {
+  if (!body || typeof body !== "object") {
+    return { ok: false, error: "Expected JSON object" };
+  }
+  const email = normalizeEmail(body.email);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { ok: false, error: "Invalid email format" };
+  }
+
+  const store = loadUserStore();
+  const user = store.users[email];
+  // Security: always return ok for existing/non-existing emails.
+  if (!user) {
+    return { ok: true, message: "If the account exists, reset link has been sent." };
+  }
+
+  if (!store.resetTokens || typeof store.resetTokens !== "object") {
+    store.resetTokens = {};
+  }
+  const token = crypto.randomBytes(24).toString("hex");
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  store.resetTokens[token] = { email, expiresAt, used: false };
+  saveUserStore(store);
+
+  const host = req.headers.host || "localhost";
+  const resetBase = (process.env.RESET_LINK_BASE_URL || `https://${host}`).replace(/\/+$/, "");
+  const resetLink = `${resetBase}/reset-password?token=${encodeURIComponent(token)}`;
+
+  const mail = await sendPasswordResetEmail(email, resetLink);
+  if (!mail.sent) {
+    // eslint-disable-next-line no-console
+    console.log(`[auth] Password reset link for ${email}: ${resetLink}`);
+  }
+
+  return { ok: true, message: "Reset link sent. Check your email." };
+}
+
+async function sendPasswordResetEmail(email, resetLink) {
+  const resendKey = String(process.env.RESEND_API_KEY || "").trim();
+  const fromEmail = String(process.env.RESET_EMAIL_FROM || "").trim();
+  if (!resendKey || !fromEmail) {
+    return { sent: false, reason: "RESEND not configured" };
+  }
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${resendKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        from: fromEmail,
+        to: [email],
+        subject: "Smart Alarm: Reset your password",
+        html: `<p>Hello!</p><p>To reset your Smart Alarm password, open this link:</p><p><a href="${escapeHtml(
+          resetLink
+        )}">${escapeHtml(resetLink)}</a></p><p>If you did not request this, just ignore this email.</p>`
+      })
+    });
+    if (!response.ok) {
+      return { sent: false, reason: `RESEND HTTP ${response.status}` };
+    }
+    return { sent: true };
+  } catch (error) {
+    return { sent: false, reason: String(error?.message || error) };
+  }
 }
 
 /** Дублирование регистрации в Supabase Postgres (если заданы SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY). */
@@ -303,6 +437,23 @@ async function syncRegistrationToSupabase(user) {
     // eslint-disable-next-line no-console
     console.warn("Supabase sync:", e);
     return { synced: false, error: String(e?.message || e) };
+  }
+}
+
+async function loadSupabaseProfileByEmail(email) {
+  const sb = getSupabaseClient();
+  if (!sb) return null;
+  try {
+    const { data, error } = await sb
+      .from("profiles")
+      .select("id,email,paid")
+      .eq("email", email)
+      .limit(1)
+      .maybeSingle();
+    if (error) return null;
+    return data || null;
+  } catch {
+    return null;
   }
 }
 

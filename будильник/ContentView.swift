@@ -135,6 +135,7 @@ struct ContentView: View {
     @State private var showSleepMode = false
     @State private var showStats = false
     @State private var showWakeResult = false
+    private static let paidStickyUntilKey = "app.userPaidStickyUntil"
 
     var body: some View {
         NavigationStack {
@@ -149,7 +150,10 @@ struct ContentView: View {
                     d.removeObject(forKey: "app.userEmail")
                     d.removeObject(forKey: "app.userFullName")
                     d.removeObject(forKey: "app.userPaid")
+                    d.removeObject(forKey: Self.paidStickyUntilKey)
                     isUserRegistered = false
+                    isUserPaid = false
+                    showPaywall = false
                     showRegistrationLanding = true
                 }
             )
@@ -193,6 +197,7 @@ struct ContentView: View {
             .onAppear {
                 sleepVM.syncSleepUIWhenViewAppears()
                 if !isUserRegistered {
+                    showPaywall = false
                     showRegistrationLanding = true
                 } else {
                     Task { await refreshPaidStateFromSupabase() }
@@ -257,7 +262,7 @@ struct ContentView: View {
                 AlarmRegistrationLandingView { payload in
                     let defaults = UserDefaults.standard
                     let storedID = defaults.string(forKey: "app.userID").flatMap(UUID.init(uuidString:))
-                    let userID = storedID ?? UUID()
+                    let userID = payload.userID ?? storedID ?? UUID()
                     defaults.set(userID.uuidString.lowercased(), forKey: "app.userID")
                     defaults.set(payload.email, forKey: "app.userEmail")
                     defaults.set(payload.fullName, forKey: "app.userFullName")
@@ -268,26 +273,33 @@ struct ContentView: View {
                         defaults.set(payload.accessToken, forKey: "dayHealth.huaweiAuto.token")
                     }
                     Task {
-                        await SupabaseDirectRegistration.syncUserAfterSignup(
-                            email: payload.email,
-                            fullName: payload.fullName
-                        )
+                        if payload.source == .signUp {
+                            await SupabaseDirectRegistration.syncUserAfterSignup(
+                                email: payload.email,
+                                fullName: payload.fullName
+                            )
+                        }
                         let profile = await SupabaseProfiles.loadOrCreateProfile(
                             userID: userID,
                             email: payload.email
                         )
                         if let profile {
                             defaults.set(profile.paid, forKey: "app.userPaid")
+                            isUserPaid = profile.paid
                         }
+                        await refreshPaidStateFromSupabase()
                     }
                     isUserRegistered = true
-                    isUserPaid = false
-                    showPaywall = true
+                    isUserPaid = payload.paidHint ?? isUserPaid
+                    showPaywall = !(payload.paidHint ?? isUserPaid)
                     showRegistrationLanding = false
                 }
                 .interactiveDismissDisabled(true)
             }
-            .fullScreenCover(isPresented: $showPaywall) {
+            .fullScreenCover(isPresented: Binding(
+                get: { showPaywall && isUserRegistered && !showRegistrationLanding },
+                set: { showPaywall = $0 }
+            )) {
                 PaywallView(
                     onPayTap: {
                         await openPaymentSuccessPage()
@@ -309,14 +321,19 @@ struct ContentView: View {
     @MainActor
     private func refreshPaidStateFromSupabase() async {
         let d = UserDefaults.standard
+        let stickyActive = isPaidStickyWindowActive()
         guard isUserRegistered else {
             showPaywall = false
             return
         }
         guard let email = d.string(forKey: "app.userEmail")?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else {
-            isUserPaid = false
-            showPaywall = true
+            if isUserPaid || stickyActive {
+                showPaywall = false
+            } else {
+                isUserPaid = false
+                showPaywall = true
+            }
             return
         }
         let storedID = d.string(forKey: "app.userID").flatMap(UUID.init(uuidString:))
@@ -325,12 +342,26 @@ struct ContentView: View {
             d.set(userID.uuidString.lowercased(), forKey: "app.userID")
         }
         if let profile = await SupabaseProfiles.loadOrCreateProfile(userID: userID, email: email) {
-            isUserPaid = profile.paid
-            showPaywall = !profile.paid
+            if profile.paid {
+                isUserPaid = true
+                showPaywall = false
+                d.set(true, forKey: "app.userPaid")
+                d.removeObject(forKey: Self.paidStickyUntilKey)
+            } else if isUserPaid || stickyActive {
+                // После успешной оплаты не возвращаем paywall мгновенно из-за лагов синка профиля.
+                showPaywall = false
+            } else {
+                isUserPaid = false
+                showPaywall = true
+            }
         } else {
-            // Если сеть/база недоступны — остаёмся в безопасном состоянии с paywall.
-            isUserPaid = false
-            showPaywall = true
+            // Сеть/бэкенд недоступны: не ломаем доступ, если локально уже оплачено.
+            if isUserPaid || stickyActive {
+                showPaywall = false
+            } else {
+                isUserPaid = false
+                showPaywall = true
+            }
         }
     }
 
@@ -353,11 +384,23 @@ struct ContentView: View {
     @MainActor
     private func handlePaymentReturnURL(_ url: URL) async {
         guard url.scheme?.lowercased() == "smartalarm" else { return }
-        let host = url.host?.lowercased() ?? ""
-        guard host == "payment-success" else { return }
         let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        let status = comps?.queryItems?.first(where: { $0.name == "status" })?.value?.lowercased()
-        guard status == "paid" else { return }
+        let host = url.host?.lowercased() ?? ""
+        let path = url.path.lowercased()
+        let isPaymentReturn = host == "payment-success" || path.contains("payment-success")
+        guard isPaymentReturn else { return }
+
+        let status = comps?.queryItems?.first(where: { $0.name == "status" })?.value?.lowercased() ?? ""
+        let paidByQuery = status == "paid" || status == "success"
+        let paidByPath = path.contains("paid") || path.contains("success")
+        guard paidByQuery || paidByPath else { return }
+
+        // UX first: after successful return from web checkout, don't keep blocking user with paywall.
+        isUserPaid = true
+        showPaywall = false
+        UserDefaults.standard.set(true, forKey: "app.userPaid")
+        markPaidStickyWindow()
+
         await markCurrentUserAsPaidForMVP()
         await refreshPaidStateFromSupabase()
         if isUserPaid {
@@ -376,28 +419,65 @@ struct ContentView: View {
             d.set(userID.uuidString.lowercased(), forKey: "app.userID")
         }
         if let profile = await SupabaseProfiles.setPaidTrue(userID: userID, email: email) {
-            isUserPaid = profile.paid
-            showPaywall = !profile.paid
-            d.set(profile.paid, forKey: "app.userPaid")
+            if profile.paid {
+                isUserPaid = true
+                showPaywall = false
+                d.set(true, forKey: "app.userPaid")
+                d.removeObject(forKey: Self.paidStickyUntilKey)
+            } else {
+                // Не откатываем UI мгновенно; refreshPaidStateFromSupabase решит по sticky/синку.
+                markPaidStickyWindow()
+            }
         }
+    }
+
+    /// Временное «липкое» paid-состояние после checkout, чтобы не было цикла paywall при задержке синка.
+    private func markPaidStickyWindow(hours: Int = 24) {
+        let until = Date().addingTimeInterval(Double(hours) * 3600)
+        UserDefaults.standard.set(until.timeIntervalSince1970, forKey: Self.paidStickyUntilKey)
+    }
+
+    private func isPaidStickyWindowActive(now: Date = Date()) -> Bool {
+        let ts = UserDefaults.standard.double(forKey: Self.paidStickyUntilKey)
+        return ts > now.timeIntervalSince1970
     }
 }
 
 private struct AlarmRegistrationPayload {
+    enum AuthSource {
+        case signUp
+        case signIn
+    }
+
+    let source: AuthSource
     let fullName: String
     let email: String
     let endpointURL: String
     let accessToken: String
+    var userID: UUID?
+    var paidHint: Bool?
 }
 
 private struct AlarmRegistrationLandingView: View {
     let onRegistered: (AlarmRegistrationPayload) -> Void
 
+    private enum AuthScreen {
+        case entry
+        case signUp
+        case signIn
+        case forgotPassword
+    }
+
+    @State private var screen: AuthScreen = .entry
     @State private var fullName = ""
     @State private var email = ""
     @State private var password = ""
+    @State private var signInEmail = ""
+    @State private var signInPassword = ""
+    @State private var forgotEmail = ""
     @State private var isSubmitting = false
     @State private var errorMessage = ""
+    @State private var forgotSuccessMessage = ""
 
     /// Адрес сервера только из кода / Info.plist — пользователь ничего не вставляет.
     private var serverRoot: String { AppCloudConfig.resolvedServiceRootURL }
@@ -427,40 +507,14 @@ private struct AlarmRegistrationLandingView: View {
                             Text("Smart Alarm")
                                 .font(.largeTitle.weight(.bold))
                                 .foregroundStyle(.white)
-                            Text("Создайте аккаунт — имя, почта и пароль. Данные сохраняются на нашем сервере автоматически.")
+                            Text(subtitleText)
                                 .font(.subheadline)
                                 .foregroundStyle(Color.white.opacity(0.72))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.top, 8)
 
-                        GlassCard {
-                            VStack(alignment: .leading, spacing: 14) {
-                                Text("Регистрация")
-                                    .font(.headline)
-                                TextField("Имя", text: $fullName)
-                                    .textFieldStyle(.plain)
-                                    .padding(12)
-                                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
-                                    .foregroundStyle(.white)
-                                    .textInputAutocapitalization(.words)
-
-                                TextField("Email", text: $email)
-                                    .textFieldStyle(.plain)
-                                    .padding(12)
-                                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
-                                    .foregroundStyle(.white)
-                                    .keyboardType(.emailAddress)
-                                    .textInputAutocapitalization(.never)
-                                    .autocorrectionDisabled()
-
-                                SecureField("Пароль (не меньше 6 символов)", text: $password)
-                                    .textFieldStyle(.plain)
-                                    .padding(12)
-                                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
-                                    .foregroundStyle(.white)
-                            }
-                        }
+                        authCard
 
                         if serverRoot.isEmpty {
                             Text("Регистрация сейчас недоступна. Установите обновление приложения или обратитесь в поддержку.")
@@ -476,30 +530,181 @@ private struct AlarmRegistrationLandingView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
 
-                        PrimaryGradientButton(title: isSubmitting ? "Отправка…" : "Создать аккаунт", systemImage: "person.badge.plus") {
-                            Task { await submit() }
-                        }
-                        .disabled(isSubmitting || !canSubmit)
-                        .opacity(canSubmit && !isSubmitting ? 1 : 0.55)
-
-                        Text("Регистрируясь, вы соглашаетесь на обработку имени и email для работы аккаунта.")
-                            .font(.caption2)
-                            .foregroundStyle(Color.white.opacity(0.45))
-                            .fixedSize(horizontal: false, vertical: true)
+                        actionButtons
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 32)
                 }
             }
-            .navigationTitle("Добро пожаловать")
+            .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if screen != .entry {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Back") {
+                            errorMessage = ""
+                            forgotSuccessMessage = ""
+                            screen = .entry
+                        }
+                    }
+                }
+            }
         }
     }
 
-    private var canSubmit: Bool {
+    private var navigationTitle: String {
+        switch screen {
+        case .entry: return "Welcome"
+        case .signUp: return "Create account"
+        case .signIn: return "Sign in"
+        case .forgotPassword: return "Reset password"
+        }
+    }
+
+    private var subtitleText: String {
+        switch screen {
+        case .entry:
+            return "Use your existing account or create a new one."
+        case .signUp:
+            return "Create an account with your name, email and password."
+        case .signIn:
+            return "Sign in with the email and password you used before."
+        case .forgotPassword:
+            return "Enter your email and we will send a reset link."
+        }
+    }
+
+    @ViewBuilder
+    private var authCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                switch screen {
+                case .entry:
+                    Text("Choose action")
+                        .font(.headline)
+                    Text("If you already had an account, tap Sign In. New users should tap Create Account.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                case .signUp:
+                    Text("Registration")
+                        .font(.headline)
+                    TextField("Name", text: $fullName)
+                        .textFieldStyle(.plain)
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
+                        .foregroundStyle(.white)
+                        .textInputAutocapitalization(.words)
+                    TextField("Email", text: $email)
+                        .textFieldStyle(.plain)
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
+                        .foregroundStyle(.white)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("Password (min 6 chars)", text: $password)
+                        .textFieldStyle(.plain)
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
+                        .foregroundStyle(.white)
+                case .signIn:
+                    Text("Sign in")
+                        .font(.headline)
+                    TextField("Email", text: $signInEmail)
+                        .textFieldStyle(.plain)
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
+                        .foregroundStyle(.white)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("Password", text: $signInPassword)
+                        .textFieldStyle(.plain)
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
+                        .foregroundStyle(.white)
+                    Button("Forgot password?") {
+                        errorMessage = ""
+                        forgotSuccessMessage = ""
+                        forgotEmail = signInEmail
+                        screen = .forgotPassword
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.indigo)
+                case .forgotPassword:
+                    Text("Reset password")
+                        .font(.headline)
+                    TextField("Email", text: $forgotEmail)
+                        .textFieldStyle(.plain)
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
+                        .foregroundStyle(.white)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        switch screen {
+        case .entry:
+            PrimaryGradientButton(title: "Sign In", systemImage: "person.fill.checkmark") {
+                errorMessage = ""
+                screen = .signIn
+            }
+            PrimaryGradientButton(title: "Create Account", systemImage: "person.badge.plus") {
+                errorMessage = ""
+                screen = .signUp
+            }
+        case .signUp:
+            PrimaryGradientButton(title: isSubmitting ? "Sending…" : "Create Account", systemImage: "person.badge.plus") {
+                Task { await submitSignUp() }
+            }
+            .disabled(isSubmitting || !canSubmitSignUp)
+            .opacity(canSubmitSignUp && !isSubmitting ? 1 : 0.55)
+            Text("By registering, you agree to processing your name and email for account operation.")
+                .font(.caption2)
+                .foregroundStyle(Color.white.opacity(0.45))
+                .fixedSize(horizontal: false, vertical: true)
+        case .signIn:
+            PrimaryGradientButton(title: isSubmitting ? "Signing in…" : "Sign In", systemImage: "key.fill") {
+                Task { await submitSignIn() }
+            }
+            .disabled(isSubmitting || !canSubmitSignIn)
+            .opacity(canSubmitSignIn && !isSubmitting ? 1 : 0.55)
+        case .forgotPassword:
+            PrimaryGradientButton(title: isSubmitting ? "Sending link…" : "Send reset link", systemImage: "envelope.fill") {
+                Task { await submitForgotPassword() }
+            }
+            .disabled(isSubmitting || !canSubmitForgot)
+            .opacity(canSubmitForgot && !isSubmitting ? 1 : 0.55)
+            if !forgotSuccessMessage.isEmpty {
+                Text(forgotSuccessMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.green.opacity(0.95))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var canSubmitSignUp: Bool {
         isValidEmail(email.trimmingCharacters(in: .whitespacesAndNewlines))
             && password.count >= 6
             && !serverRoot.isEmpty
+    }
+
+    private var canSubmitSignIn: Bool {
+        isValidEmail(signInEmail.trimmingCharacters(in: .whitespacesAndNewlines))
+            && signInPassword.count >= 6
+            && !serverRoot.isEmpty
+    }
+
+    private var canSubmitForgot: Bool {
+        isValidEmail(forgotEmail.trimmingCharacters(in: .whitespacesAndNewlines)) && !serverRoot.isEmpty
     }
 
     private func isValidEmail(_ s: String) -> Bool {
@@ -525,26 +730,26 @@ private struct AlarmRegistrationLandingView: View {
         return comp.url?.absoluteString ?? trimmed
     }
 
-    private func registerURL(from endpointRoot: String) -> URL? {
+    private func authURL(from endpointRoot: String, path: String) -> URL? {
         var normalized = endpointRoot.trimmingCharacters(in: .whitespacesAndNewlines)
         if !normalized.lowercased().hasPrefix("http://"), !normalized.lowercased().hasPrefix("https://") {
             normalized = "https://" + normalized
         }
         guard var comp = URLComponents(string: normalized) else { return nil }
-        comp.path = "/v1/auth/register"
+        comp.path = path
         comp.query = nil
         comp.fragment = nil
         return comp.url
     }
 
-    private func submit() async {
+    private func submitSignUp() async {
         errorMessage = ""
         let root = serverRoot
         guard !root.isEmpty else {
             errorMessage = "Приложение не настроено: нет адреса сервера в сборке."
             return
         }
-        guard let url = registerURL(from: root) else {
+        guard let url = authURL(from: root, path: "/v1/auth/register") else {
             errorMessage = "Некорректный адрес сервера в настройках сборки."
             return
         }
@@ -577,6 +782,7 @@ private struct AlarmRegistrationLandingView: View {
                 let normalizedEndpoint = normalizedHuaweiEndpointString(root)
                 onRegistered(
                     AlarmRegistrationPayload(
+                        source: .signUp,
                         fullName: fullName.trimmingCharacters(in: .whitespacesAndNewlines),
                         email: email.trimmingCharacters(in: .whitespacesAndNewlines),
                         endpointURL: normalizedEndpoint,
@@ -593,6 +799,138 @@ private struct AlarmRegistrationLandingView: View {
         } catch {
             errorMessage = "Проблема с сетью: \(error.localizedDescription)"
         }
+    }
+
+    private func submitSignIn() async {
+        errorMessage = ""
+        forgotSuccessMessage = ""
+        let root = serverRoot
+        guard let url = authURL(from: root, path: "/v1/auth/login") else {
+            errorMessage = "Некорректный адрес сервера."
+            return
+        }
+        isSubmitting = true
+        defer { isSubmitting = false }
+
+        let body: [String: String] = [
+            "email": signInEmail.trimmingCharacters(in: .whitespacesAndNewlines),
+            "password": signInPassword,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+            errorMessage = "Не удалось сформировать запрос."
+            return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        req.timeoutInterval = 45
+
+        do {
+            let (responseData, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                errorMessage = "Нет ответа от сервера. Проверьте интернет."
+                return
+            }
+            guard (200 ... 299).contains(http.statusCode) else {
+                let hint = String(data: responseData, encoding: .utf8) ?? ""
+                if http.statusCode == 404 {
+                    errorMessage = "Сервер ещё не обновлён: вход недоступен (404 /v1/auth/login). Обновите backend на Render и повторите."
+                } else {
+                    errorMessage = "Неверный email или пароль. (\(http.statusCode))"
+                }
+                if !hint.isEmpty { errorMessage += " \(String(hint.prefix(120)))" }
+                return
+            }
+
+            let payload = parseSignInResponse(data: responseData, fallbackEmail: signInEmail)
+            onRegistered(payload)
+        } catch {
+            errorMessage = "Проблема с сетью: \(error.localizedDescription)"
+        }
+    }
+
+    private func submitForgotPassword() async {
+        errorMessage = ""
+        forgotSuccessMessage = ""
+        let root = serverRoot
+        guard let url = authURL(from: root, path: "/v1/auth/forgot-password") else {
+            errorMessage = "Некорректный адрес сервера."
+            return
+        }
+        isSubmitting = true
+        defer { isSubmitting = false }
+
+        let body: [String: String] = [
+            "email": forgotEmail.trimmingCharacters(in: .whitespacesAndNewlines),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+            errorMessage = "Не удалось сформировать запрос."
+            return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        req.timeoutInterval = 45
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                errorMessage = "Нет ответа от сервера. Проверьте интернет."
+                return
+            }
+            guard (200 ... 299).contains(http.statusCode) else {
+                if http.statusCode == 404 {
+                    errorMessage = "Сервер ещё не обновлён: сброс пароля недоступен (404 /v1/auth/forgot-password)."
+                } else {
+                    errorMessage = "Не удалось отправить письмо для сброса пароля."
+                }
+                return
+            }
+            forgotSuccessMessage = "Reset link sent. Check your email."
+        } catch {
+            errorMessage = "Проблема с сетью: \(error.localizedDescription)"
+        }
+    }
+
+    private func parseSignInResponse(data: Data, fallbackEmail: String) -> AlarmRegistrationPayload {
+        var resolvedFullName = ""
+        var resolvedEmail = fallbackEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        var resolvedID: UUID?
+        var resolvedPaid: Bool?
+        var resolvedAccessToken = ""
+
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let token = obj["accessToken"] as? String, !token.isEmpty {
+                resolvedAccessToken = token
+            }
+            if let paid = obj["paid"] as? Bool {
+                resolvedPaid = paid
+            } else if let profile = obj["profile"] as? [String: Any], let paid = profile["paid"] as? Bool {
+                resolvedPaid = paid
+            }
+
+            if let user = obj["user"] as? [String: Any] {
+                if let n = user["fullName"] as? String { resolvedFullName = n }
+                if let e = user["email"] as? String, !e.isEmpty { resolvedEmail = e }
+                if let id = user["id"] as? String, let uuid = UUID(uuidString: id) { resolvedID = uuid }
+            } else {
+                if let n = obj["fullName"] as? String { resolvedFullName = n }
+                if let e = obj["email"] as? String, !e.isEmpty { resolvedEmail = e }
+                if let id = obj["id"] as? String, let uuid = UUID(uuidString: id) { resolvedID = uuid }
+            }
+        }
+
+        return AlarmRegistrationPayload(
+            source: .signIn,
+            fullName: resolvedFullName,
+            email: resolvedEmail,
+            endpointURL: normalizedHuaweiEndpointString(serverRoot),
+            accessToken: resolvedAccessToken,
+            userID: resolvedID,
+            paidHint: resolvedPaid
+        )
     }
 }
 
@@ -1862,7 +2200,7 @@ private struct AlarmMelodySettingsView: View {
                             }
                         }
                         .pickerStyle(.wheel)
-                        Text("Предпросмотр здесь — около 25 секунд. В приложении при звонке будильник играет по кругу, пока вы его не выключите.")
+                        Text("Built-in plays in app on alarm and keeps app vibration profile.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     } else if alarmVM.wakeSoundMode == .appleMusic {
@@ -1888,7 +2226,7 @@ private struct AlarmMelodySettingsView: View {
                                 }
                                 .font(.subheadline.weight(.semibold))
                             } else {
-                                Text("Choose a song from your library. It will be the only alarm sound until you switch back to Built-in.")
+                                Text("Choose a song from your library. If you prefer built-in alarm tones, switch to Built-in.")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             }

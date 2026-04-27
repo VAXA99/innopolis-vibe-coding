@@ -383,38 +383,26 @@ final class AlarmManager {
         center.removePendingNotificationRequests(withIdentifiers: idsToRemove)
         center.removeDeliveredNotifications(withIdentifiers: idsToRemove)
 
-        // AlarmKit играет только короткий системный тон; полный плеер «подключает» `AlarmKitAlarmLifecycleObserver` в процессе
-        // приложения. Пока приложение не в памяти, observer не работает, а основного UN `smart_alarm_wakeup` в этом режиме
-        // нет — `reconcileDeliveredWakeNotifications` не может стартовать Apple Music. Для встроенного ринга (mp3 в бандле) Kit уместен
-        // как в «Часы»; для Apple Music/файла — всегда планируем UN (короткий сигнал, но с тем же id для разбора).
-        var useAlarmKitMainWake = false
+        // Единый путь без системного AlarmKit-экрана: всегда планируем main wake через UN.
+        // Это убирает регресс «сработал как системный Apple-алерт вместо выбранного режима приложения».
 #if canImport(AlarmKit) && os(iOS)
         if #available(iOS 26.0, *) {
-            if AlarmWakeSoundModeStorage.resolvedMode() == .builtIn,
-               let didSchedule = try? await AlarmKitWakeScheduler.scheduleMainWake(fireDate: fireDate, sound: sound) {
-                useAlarmKitMainWake = didSchedule
-            }
-            if !useAlarmKitMainWake {
-                // Снять Kit, если: не встроенный; не удалось запланировать; или смена с Kit на другое
-                AlarmKitWakeScheduler.cancelScheduledWake()
-            }
+            AlarmKitWakeScheduler.cancelScheduledWake()
         }
 #endif
 
-        if !useAlarmKitMainWake {
-            let content = UNMutableNotificationContent()
-            content.title = "Wake up"
-            content.body = "Time to wake up."
-            content.sound = AlarmWakeNotificationSound.resolved(for: sound)
-            if #available(iOS 15.0, *) {
-                content.interruptionLevel = .timeSensitive
-            }
-
-            let dateComponents = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: fireDate)
-            let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: false)
-            let request = UNNotificationRequest(identifier: alarmIdentifier, content: content, trigger: trigger)
-            try await center.add(request)
+        let content = UNMutableNotificationContent()
+        content.title = "Wake up"
+        content.body = "Time to wake up."
+        content.sound = AlarmWakeNotificationSound.resolved(for: sound)
+        if #available(iOS 15.0, *) {
+            content.interruptionLevel = .timeSensitive
         }
+
+        let dateComponents = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: fireDate)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: false)
+        let request = UNNotificationRequest(identifier: alarmIdentifier, content: content, trigger: trigger)
+        try await center.add(request)
 
         if followupCount > 0 {
             try await scheduleFollowupNotifications(
