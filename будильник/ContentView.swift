@@ -212,6 +212,7 @@ struct ContentView: View {
                 sleepVM.syncSleepUIWhenViewAppears()
                 Task {
                     await reconcileDeliveredWakeNotifications(sleepVM: sleepVM, alarmVM: alarmVM)
+                    recoverMissedWakeIfNeeded(sleepVM: sleepVM, alarmVM: alarmVM)
                     if isUserRegistered { await refreshPaidStateFromSupabase() }
                 }
             }
@@ -3162,4 +3163,25 @@ private func reconcileDeliveredWakeNotifications(sleepVM: SleepViewModel, alarmV
             alarmVM.playAlarmFromNotification(notificationDeliveryDate: maxDelivery)
         }
     }
+}
+
+@MainActor
+private func recoverMissedWakeIfNeeded(sleepVM: SleepViewModel, alarmVM: AlarmViewModel, now: Date = Date()) {
+    guard let fireDate = AlarmManager.persistedMainWakeFireDate() else { return }
+    let delta = now.timeIntervalSince(fireDate)
+    // Recover only recent misses to avoid random ringing long after wake time.
+    guard delta >= 0, delta <= 90 * 60 else { return }
+
+    if sleepVM.isRunning && sleepVM.sleepUIMode == .sleeping {
+        AlarmPlaybackAnchor.recordIfNeeded(fireDate)
+        sleepVM.handleExternalAlarmFired()
+        return
+    }
+
+    if sleepVM.isRunning && sleepVM.sleepUIMode == .alarmRinging {
+        sleepVM.reassertAlarmPlaybackFromForegroundIfNeeded()
+        return
+    }
+
+    alarmVM.playAlarmFromNotification(notificationDeliveryDate: fireDate)
 }

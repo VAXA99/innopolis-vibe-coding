@@ -190,6 +190,7 @@ final class AlarmManager {
     private let alarmFollowupPrefix = "smart_alarm_wakeup_followup"
     private let sleepTimerIdentifier = "smart_alarm_sleep_timer_end"
     private let snoozeIdentifier = "smart_alarm_snooze"
+    private static let persistedMainWakeFireDateKey = "smartAlarm.mainWake.fireDate"
     /// Max follow-ups we ever scheduled (cleanup only).
     private static let maxLegacyFollowups = 5
 
@@ -219,6 +220,13 @@ final class AlarmManager {
         ids += (1...Self.maxLegacyFollowups).map { "\(alarmFollowupPrefix)_\($0)" }
         center.removePendingNotificationRequests(withIdentifiers: ids)
         center.removeDeliveredNotifications(withIdentifiers: ids)
+        UserDefaults.standard.removeObject(forKey: Self.persistedMainWakeFireDateKey)
+    }
+
+    static func persistedMainWakeFireDate() -> Date? {
+        let raw = UserDefaults.standard.double(forKey: persistedMainWakeFireDateKey)
+        guard raw > 0 else { return nil }
+        return Date(timeIntervalSince1970: raw)
     }
 
     func cancelSleepTimerNotification() {
@@ -403,6 +411,7 @@ final class AlarmManager {
         let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: false)
         let request = UNNotificationRequest(identifier: alarmIdentifier, content: content, trigger: trigger)
         try await center.add(request)
+        UserDefaults.standard.set(fireDate.timeIntervalSince1970, forKey: Self.persistedMainWakeFireDateKey)
 
         if followupCount > 0 {
             try await scheduleFollowupNotifications(
